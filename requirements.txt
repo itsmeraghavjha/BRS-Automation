@@ -1,0 +1,9 @@
+# requirements.txt
+Flask
+Flask-SQLAlchemy
+Flask-Migrate
+Flask-Login
+Flask-Bcrypt
+pandas
+openpyxl
+xlrd

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ title }} - Heritage BRS Automation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --heritage-green: #166534;
+            --heritage-light-green: #f0fdf4;
+            --heritage-text: #1f2937;
+        }
+        body { background-color: #f8fafc; color: var(--heritage-text); font-family: 'Inter', sans-serif; }
+        .main-button { background-color: var(--heritage-green); transition: background-color 0.3s ease; }
+        .main-button:hover { background-color: #15803d; }
+        .secondary-button { color: var(--heritage-green); border-color: var(--heritage-green); }
+        .secondary-button:hover { background-color: var(--heritage-light-green); }
+        .table-container { max-height: 60vh; overflow-y: auto; }
+        #drop-zone { border: 2px dashed #d1d5db; transition: all 0.3s ease; }
+        #drop-zone.dragover { border-color: var(--heritage-green); background-color: var(--heritage-light-green); }
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid var(--heritage-green); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .custom-select { -webkit-appearance: none; -moz-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e"); background-position: right 0.5rem center; background-repeat: no-repeat; background-size: 1.5em 1.5em; padding-right: 2.5rem; }
+        .form-input:focus { border-color: var(--heritage-green); box-shadow: 0 0 0 2px rgba(22, 101, 52, 0.2); outline: none; }
+        select:disabled { background-color: #f3f4f6; cursor: not-allowed; opacity: 0.7; }
+    </style>
+</head>
+<body data-is-admin="{{ (current_user.is_authenticated and current_user.role == 'admin') | tojson }}">
+    <div class="min-h-screen flex flex-col">
+        <header class="bg-white shadow-sm w-full">
+            <div class="max-w-screen-2xl mx-auto px-6 py-0 flex justify-between items-center">
+                <div class="flex items-center">
+                    <img src="{{ url_for('static', filename='logo.png') }}" alt="Heritage Logo" class="h-16 w-auto object-contain">
+                </div>
+                <div class="flex items-center space-x-4">
+                    {% if current_user.is_authenticated and current_user.role == 'admin' %}
+                        <button id="manage-mappings-btn" class="secondary-button font-semibold py-2 px-4 border rounded-lg flex items-center space-x-2">
+                            <i class="fas fa-cogs"></i>
+                            <span>Manage Mappings</span>
+                        </button>
+                    {% endif %}
+                    {% if current_user.is_authenticated %}
+                        <span class="text-gray-600">Hello, {{ current_user.username }}</span>
+                        <a href="{{ url_for('auth.logout') }}" class="main-button text-white font-semibold py-2 px-4 rounded-lg">Logout</a>
+                    {% else %}
+                        <a href="{{ url_for('auth.login') }}" class="main-button text-white font-semibold py-2 px-4 rounded-lg">Admin Login</a>
+                    {% endif %}
+                </div>
+            </div>
+        </header>
+
+        <main class="max-w-screen-2xl mx-auto p-6 flex-grow w-full">
+            <div id="upload-card" class="bg-white p-8 rounded-xl shadow-lg border border-gray-100">
+                <div id="upload-initial-state">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-2">Process New Bank Statement</h2>
+                    <p class="text-gray-500 mb-6">Select the bank, then drag & drop your file or click to select.</p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        <div>
+                            <label for="bank-select" class="block text-sm font-medium text-gray-700 mb-2">1. Select Bank</label>
+                            <select id="bank-select" class="custom-select block w-full p-3 border border-gray-300 rounded-md shadow-sm bg-white form-input">
+                                <option value="">-- Please choose a bank --</option>
+                                <option value="hdfc">HDFC Bank Ltd</option>
+                                <option value="icici">ICICI Bank Ltd</option>
+                                <option value="kotak">Kotak Mahindra Bank</option>
+                                <option value="bob">Bank of Baroda</option>
+                                <option value="ubi">Union Bank of India</option>
+                            </select>
+                        </div>
+                        <div id="account-type-container">
+                             <label for="account-type-select" class="block text-sm font-medium text-gray-700 mb-2">2. Account Type</label>
+                             <select id="account-type-select" class="custom-select block w-full p-3 border border-gray-300 rounded-md shadow-sm bg-white form-input" disabled>
+                                 <option value="retail">Retail</option>
+                                 <option value="corporate">Corporate</option>
+                             </select>
+                        </div>
+                    </div>
+                    <div id="drop-zone" class="rounded-lg p-10 text-center cursor-pointer bg-gray-50">
+                        <input type="file" id="statement-file" class="hidden" accept=".xlsx, .xls, .csv">
+                        <div class="flex flex-col items-center">
+                             <i class="fas fa-cloud-upload-alt text-5xl text-gray-400 mb-4"></i>
+                             <p class="text-gray-700 font-semibold">3. Drop file here or <span class="text-green-700 font-bold">browse</span></p>
+                             <p class="text-xs text-gray-500 mt-1">Supports .xlsx, .xls and .csv</p>
+                        </div>
+                    </div>
+                </div>
+                 <div id="upload-selected-state" class="hidden">
+                     <div class="flex items-center justify-between bg-green-50 border border-green-200 p-4 rounded-lg">
+                         <div class="flex items-center space-x-3">
+                             <i class="fas fa-file-excel text-green-600 text-2xl"></i>
+                             <div>
+                                 <p id="file-name" class="font-medium text-gray-800"></p>
+                                 <p id="bank-name-display" class="text-sm text-gray-600"></p>
+                             </div>
+                         </div>
+                         <button id="clear-file-btn" class="text-red-500 hover:text-red-700 font-bold text-xl">&times;</button>
+                     </div>
+                     <button id="process-btn" class="main-button w-full text-white font-bold py-3 px-4 rounded-lg mt-6 flex items-center justify-center space-x-2">
+                         <i class="fas fa-cogs"></i>
+                         <span>Process Statement</span>
+                     </button>
+                </div>
+                 <div id="processing-state" class="hidden text-center py-10">
+                     <div class="loader mx-auto"></div>
+                     <p class="mt-4 text-lg font-semibold text-gray-700">Analyzing your statement...</p>
+                     <p class="text-gray-500">This may take a moment.</p>
+                 </div>
+            </div>
+
+            <div id="results-container" class="hidden mt-8 opacity-0 transition-opacity duration-500">
+                <div class="bg-white p-8 rounded-xl shadow-lg border border-gray-100">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <h2 class="text-2xl font-bold text-gray-800">Processing Complete</h2>
+                            <p id="status-text" class="text-gray-500"></p>
+                        </div>
+                        <div class="flex space-x-3">
+                            <button id="download-btn" class="bg-yellow-500 text-yellow-900 font-bold py-3 px-5 rounded-lg flex items-center space-x-2 hover:bg-yellow-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                               <i class="fas fa-download"></i>
+                               <span>Download as Text</span>
+                            </button>
+                            <button id="download-excel-btn" class="bg-green-600 text-white font-bold py-3 px-5 rounded-lg flex items-center space-x-2 hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                               <i class="fas fa-file-excel"></i>
+                               <span>Download as Excel</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="table-container border border-gray-200 rounded-lg">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead id="data-table-head" class="bg-gray-100 sticky top-0 z-10">
+                                </thead>
+                            <tbody id="data-table-body" class="bg-white divide-y divide-gray-200"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div id="mapping-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true"><div class="absolute inset-0 bg-gray-500 opacity-75"></div></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+            <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-6xl sm:w-full">
+                <div class="bg-white px-6 pt-5 pb-4 sm:p-6 sm:pb-4">
+                    <div class="flex justify-between items-center">
+                        <h3 class="text-xl leading-6 font-bold text-gray-900" id="modal-title">Manage Account Mappings</h3>
+                        <button id="add-new-mapping-btn" class="main-button text-white font-semibold py-2 px-4 rounded-lg flex items-center space-x-2">
+                            <i class="fas fa-plus"></i>
+                            <span>Add New Mapping</span>
+                        </button>
+                    </div>
+                    <div id="mapping-table-container" class="mt-4 table-container border border-gray-200 rounded-lg"></div>
+                </div>
+                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <button type="button" data-close-modal="mapping-modal" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:mt-0 sm:w-auto sm:text-sm">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="mapping-form-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true"><div class="absolute inset-0 bg-gray-500 opacity-75"></div></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+            <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full">
+                <form id="mapping-form">
+                    <div class="bg-white px-4 pt-5 pb-4 sm:p-8">
+                        <div class="flex items-center space-x-3 mb-6">
+                            <i id="form-modal-icon" class="fas fa-plus-circle text-2xl text-green-700"></i>
+                            <h3 class="text-xl leading-6 font-bold text-gray-900" id="form-modal-title">Add New Mapping</h3>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <input type="hidden" id="original-account-no">
+                            <div>
+                                <label for="accountNo" class="block text-sm font-medium text-gray-700">Account Number</label>
+                                <input type="text" id="accountNo" name="accountNo" class="form-input mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-50 p-3" required>
+                            </div>
+                            <div>
+                                <label for="profitCenter" class="block text-sm font-medium text-gray-700">Profit Center</label>
+                                <input type="text" id="profitCenter" name="profitCenter" class="form-input mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-50 p-3">
+                            </div>
+                            <div>
+                                <label for="costCenter" class="block text-sm font-medium text-gray-700">Cost Center</label>
+                                <input type="text" id="costCenter" name="costCenter" class="form-input mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-50 p-3">
+                            </div>
+                            <div>
+                                <label for="branchName" class="block text-sm font-medium text-gray-700">Branch Name</label>
+                                <input type="text" id="branchName" name="branchName" class="form-input mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-50 p-3">
+                            </div>
+                            <div>
+                                <label for="owner" class="block text-sm font-medium text-gray-700">Owner</label>
+                                <input type="text" id="owner" name="owner" class="form-input mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-50 p-3">
+                            </div>
+                            <div>
+                                <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
+                                <input type="email" id="email" name="email" class="form-input mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-50 p-3">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-gray-50 px-4 py-4 sm:px-6 sm:flex sm:flex-row-reverse">
+                        <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 main-button text-base font-medium text-white sm:ml-3 sm:w-auto sm:text-sm">Save Mapping</button>
+                        <button type="button" data-close-modal="mapping-form-modal" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:mt-0 sm:w-auto sm:text-sm">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <div id="alert-modal" class="hidden fixed z-50 inset-0 overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 transition-opacity" aria-hidden="true"><div class="absolute inset-0 bg-gray-500 opacity-75"></div></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+            <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                    <div class="sm:flex sm:items-start">
+                        <div id="alert-icon-container" class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full sm:mx-0 sm:h-10 sm:w-10">
+                            <i id="alert-icon" class="fas fa-2x"></i>
+                        </div>
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                            <h3 class="text-lg leading-6 font-medium text-gray-900" id="alert-title">Notification</h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500" id="alert-message">Your message here.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse" id="alert-buttons"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}" defer></script>
+</body>
+</html>
