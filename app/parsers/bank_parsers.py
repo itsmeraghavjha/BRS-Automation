@@ -3,6 +3,8 @@
 import re
 import pandas as pd
 from abc import ABC, abstractmethod
+import csv 
+import io   
 
 # --- Helper function for post-header processing (used by standard parsers) ---
 def process_data_frame(df, header_row_index, index_to_std_name):
@@ -101,13 +103,19 @@ class StatementParser(ABC):
         if value is None: return 0.0
         s_value = str(value).strip()
         if not s_value: return 0.0
-        s_value = s_value.replace(',', '').replace('₹', '').replace('rs.', '').replace('Rs.', '')
+        
+        # --- THIS IS THE FIX ---
+        # It now strips quotes *before* trying to replace commas
+        s_value = s_value.strip('"').replace(',', '').replace('₹', '').replace('rs.', '').replace('Rs.', '')
+        # -------------------------
+        
         s_value = s_value.replace('(', '-').replace(')', '')
         try:
             num = pd.to_numeric(s_value, errors='coerce')
             return 0.0 if pd.isna(num) else float(num)
         except Exception:
             return 0.0
+
 
 
 # --- HDFC Parsers ---
@@ -382,6 +390,66 @@ class BOBParser(StatementParser):
         return account_no, pd.DataFrame(transactions_list)
 
 class KotakParser(StatementParser):
+    # --- THIS IS THE NEW, *CORRECT* FILE-READING LOGIC ---
+    def __init__(self, file):
+        self.file = file
+        self.file.seek(0)
+        try:
+            content = self.file.read().decode('utf-8', errors='ignore')
+        except AttributeError:
+             self.file.seek(0)
+             content = self.file.read().decode('utf-8', errors='ignore')
+
+        self.file.seek(0)
+
+        # --- THIS IS THE FIX ---
+        data_rows = []
+        # Use io.StringIO to treat the string as a file
+        content_file = io.StringIO(content)
+        # Use the 'csv' module to correctly parse rows
+        # This correctly handles commas inside quoted fields
+        reader = csv.reader(content_file)
+        
+        for row in reader:
+            if not row: # Skip empty rows
+                continue
+            data_rows.append(row)
+        # ---------------------------------------------------
+        
+        # We no longer need to pad, csv.reader gives full rows
+        # but we must find the max columns to be safe
+        try:
+            max_cols = max(len(row) for row in data_rows if row)
+        except ValueError:
+            max_cols = 10 # Default
+            
+        padded_rows = []
+        for row in data_rows:
+            padded = row + [pd.NA] * (max_cols - len(row))
+            padded_rows.append(padded)
+
+        self.df = pd.DataFrame(padded_rows)
+        if not isinstance(self.df, pd.DataFrame):
+            raise ValueError("Uploaded file could not be parsed into a DataFrame.")
+    # ---------------------------------------------------
+
+    # --- WE ADD A LOCAL clean_amount TO BE SAFE ---
+    def clean_amount(self, value):
+        if value is None: return 0.0
+        s_value = str(value).strip()
+        if not s_value: return 0.0
+        
+        # It now strips quotes *before* trying to replace commas
+        s_value = s_value.strip('"').replace(',', '').replace('₹', '').replace('rs.', '').replace('Rs.', '')
+        
+        s_value = s_value.replace('(', '-').replace(')', '')
+        try:
+            num = pd.to_numeric(s_value, errors='coerce')
+            return 0.0 if pd.isna(num) else float(num)
+        except Exception:
+            return 0.0
+    # ---------------------------------------------------
+
     def parse(self):
         account_no = None
         for _, row in self.df.head(20).iterrows():
@@ -391,37 +459,54 @@ class KotakParser(StatementParser):
                 account_no = match.group(1)
                 break
 
+        # --- THESE ARE THE CORRECT KEYWORDS FOR THE NEW FILE ---
         header_keywords = {
-            'date': ['date'], 'narration': ['description'],
-            'referenceId': ['chq / ref number', 'ref number'], 'amount': ['amount'], 'type': ['dr / cr']
+            'date': ['transaction date'],
+            'narration': ['description'],
+            'referenceId': ['chq / ref no.'],
+            'amount': ['amount'],
+            'type': ['dr / cr']
         }
-        # The index-based mapping guarantees the FIRST 'dr / cr' column is chosen
-        header_row_index, index_to_std_name = self.find_header_row(header_keywords, min_matches=4)
+        
+        # We keep min_matches=4 because it is good practice
+        header_row_index, index_to_std_name = self.find_header_row(
+            header_keywords, min_matches=4
+        )
         if header_row_index == -1:
             raise ValueError("Kotak header not found.")
 
-        # UPDATED: Use helper function to apply index-based renaming
+        # This helper function will still work correctly
         data_df = process_data_frame(self.df, header_row_index, index_to_std_name)
         
         transactions_list = []
         for _, row in data_df.iterrows():
-            if row.isna().all() or (pd.isna(row.get('date')) and pd.isna(row.get('amount'))):
-                continue
-            amount = self.clean_amount(row.get('amount'))
-            # Accesses the column which was mapped to 'type', GUARANTEED to be the FIRST 'Dr / Cr' column.
-            tx_type = str(row.get('type', '')).strip().lower() 
-            if amount > 0:
-                is_debit = 'dr' in tx_type
-                is_credit = 'cr' in tx_type
-                transactions_list.append({
-                    'date': row.get('date'),
-                    'narration': str(row.get('narration', '')).strip(),
-                    'withdrawal': amount if is_debit else 0.0,
-                    'deposit': amount if is_credit else 0.0,
-                    'referenceId': str(row.get('referenceId', '')).strip()
-                })
-        return account_no, pd.DataFrame(transactions_list)
+            if row.isna().all() or (pd.isna(row.get('date'))):
+                 continue
+            
+            amount_str = row.get('amount')
+            
+            # --- REMOVED DEBUG PRINT ---
+            # print(f"[DEBUG] Raw amount_str from DataFrame: {amount_str!r}")
+            # ---------------------------
 
+            # This line now calls the LOCAL, FIXED clean_amount function
+            amount = self.clean_amount(str(amount_str)) 
+            
+            tx_type = str(row.get('type', '')).strip().lower() 
+            
+            is_debit = 'dr' in tx_type
+            is_credit = 'cr' in tx_type
+
+            transactions_list.append({
+                'date': row.get('date'),
+                'narration': str(row.get('narration', '')).strip(),
+                'withdrawal': amount if is_debit else 0.0,
+                'deposit': amount if is_credit else 0.0,
+                'referenceId': str(row.get('referenceId', '')).strip()
+            })
+
+        return account_no, pd.DataFrame(transactions_list)
+    
 class UBIParser(StatementParser):
     def parse(self):
         account_no = None
