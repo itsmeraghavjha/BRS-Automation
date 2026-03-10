@@ -643,6 +643,8 @@
 
 
 // app/static/js/main.js
+// app/static/js/main.js
+// app/static/js/main.js
 document.addEventListener('DOMContentLoaded', () => {
     const App = {
         state: {
@@ -693,6 +695,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.ui.clearFileBtn = document.getElementById('clear-file-btn');
             this.ui.downloadBtn = document.getElementById('download-btn');
             this.ui.downloadExcelBtn = document.getElementById('download-excel-btn');
+            this.ui.pushSapBtn = document.getElementById('push-sap-btn'); // NEW: Added Push to SAP button
             this.ui.fileNameDisplay = document.getElementById('file-name');
             this.ui.bankNameDisplay = document.getElementById('bank-name-display');
             this.ui.uploadInitialState = document.getElementById('upload-initial-state');
@@ -737,6 +740,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.ui.processBtn?.addEventListener('click', () => this.handlers.processStatement()); 
             this.ui.downloadBtn?.addEventListener('click', () => this.handlers.downloadResults()); 
             this.ui.downloadExcelBtn?.addEventListener('click', () => this.handlers.downloadExcel());
+            this.ui.pushSapBtn?.addEventListener('click', () => this.handlers.pushToSAP()); // NEW: Added listener for SAP button
 
             // Drop Zone Drag Events
             this.ui.dropZone?.addEventListener('dragover', (e) => this.handlers.handleDragOver(e));
@@ -797,6 +801,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     throw new Error(result.error || 'Failed to process file on the server.');
                 }
                 return result;
+            },
+            // NEW: Added API call for Push to SAP
+            async pushToSAP(payload) {
+                const response = await fetch('/push-to-sap', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify(payload) 
+                });
+                return response.json();
             }
         },
 
@@ -853,12 +866,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             },
             
-            async processStatement() {
+            async processStatement(selectedAccount = null) {
                 const file = App.state.currentFile;
                 const bank = App.ui.bankSelect?.value;
                 const accountType = App.ui.accountTypeSelect?.value;
-
-                console.log('Processing started:', { bank, accountType, fileName: file?.name });
 
                 if (!bank || !file) {
                     return App.render.showAlert('Missing Information', 'Please select a bank and a statement file to process.', 'warning');
@@ -871,18 +882,23 @@ document.addEventListener('DOMContentLoaded', () => {
                     formData.append('statement', file);
                     formData.append('bank', bank);
                     formData.append('account_type', accountType);
+                    
+                    if (selectedAccount) {
+                        formData.append('selected_account', selectedAccount);
+                    }
 
-                    console.log('Sending request to /process...');
                     const result = await App.api.processFile(formData);
                     
-                    console.log('Received result:', result);
-                    
-                    if (!result) {
-                        throw new Error('Empty response from server');
+                    if (!result) throw new Error('Empty response from server');
+
+                    if (result.status === 'multiple_accounts') {
+                        App.render.updateUploadState('selected'); // Stop spinner
+                        App.render.showAccountSelectionModal(result.accounts, (chosenAccount) => {
+                            App.handlers.processStatement(chosenAccount);
+                        });
+                        return; 
                     }
                     
-                    // --- CHANGE #1: Fix the error check ---
-                    // This now checks if 'headers' is an array (even an empty one)
                     if (!result.rows || !Array.isArray(result.headers)) {
                         throw new Error('Invalid response format: ' + JSON.stringify(result));
                     }
@@ -897,18 +913,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     App.render.showAlert('Processing Error', error.message, 'error');
                 }
             },
-            
-            // app/static/js/main.js
-
-            // ... inside handlers object ...
 
             downloadResults() {
                 const data = App.state.processedData;
                 if (!data || !data.rows || data.rows.length === 0) {
-                    return App.render.showAlert('Download Error', 'No processed data available to download.', 'warning');
+                    return App.render.showAlert('Download Error', 'No processed data available.', 'warning');
                 }
                 
-                // 1. Group rows by the Account No (Hidden last column, index 7)
+                const headers = data.headers; 
+                
+                // Group rows by Account No
                 const groups = {};
                 data.rows.forEach(row => {
                     const accNo = row[row.length - 1] || 'Report';
@@ -918,39 +932,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const accountNumbers = Object.keys(groups);
                 
-                // 2. Process downloads with a DELAY (to prevent browser blocking)
                 accountNumbers.forEach((accNo, index) => {
                     setTimeout(() => {
                         const groupRows = groups[accNo];
                         
-                        // 3. TRANSFORM CONTENT:
-                        // - Slice(0, -1) REMOVES the Account Number from the row content.
-                        // - Join with tabs (\t).
+                        // Use Pipe delimiter AND add one at the very end
                         const rowStrings = groupRows.map(row => 
-                            row.slice(0, -1).map(cell => (cell === null || cell === undefined) ? '' : String(cell)).join('\t')
+                            row.slice(0, -1).map(cell => (cell === null || cell === undefined) ? '' : String(cell)).join('|') + '|'
                         );
                         
-                        // 4. NO HEADERS: Just the data rows.
-                        const fileContent = rowStrings.join('\n');
+                        let fileContent;
+                        if (headers && headers.length > 0) {
+                            // Add a pipe at the end of the header row too
+                            const headerString = headers.join('|') + '|'; 
+                            fileContent = [headerString, ...rowStrings].join('\n');
+                        } else {
+                            fileContent = rowStrings.join('\n');
+                        }
                         
                         const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
                         const url = URL.createObjectURL(blob);
                         
                         const a = document.createElement('a');
                         a.href = url;
-                        // 5. FILENAME: Includes the Account Number
                         a.download = `Statement_${accNo}_${new Date().toISOString().slice(0, 10)}.txt`;
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);
                         URL.revokeObjectURL(url);
                         
-                    }, index * 1000); // 1 Second delay
+                    }, index * 1000); 
                 });
-                
-                if (accountNumbers.length > 1) {
-                    App.render.showAlert('Downloads Started', `Downloading ${accountNumbers.length} files...`, 'success');
-                }
             },
 
             downloadExcel() {
@@ -959,9 +971,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     return App.render.showAlert('Download Error', 'No processed data available to download.', 'warning');
                 }
                 
-                const headers = data.headers; // Standard 7 headers
+                const headers = data.headers;
 
-                // 1. Group rows by the Hidden Account No (Last Column)
                 const groups = {};
                 data.rows.forEach(row => {
                     const accNo = row[row.length - 1] || 'Report';
@@ -971,33 +982,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const accountNumbers = Object.keys(groups);
 
-                // 2. Process downloads with a DELAY
                 accountNumbers.forEach((accNo, index) => {
                     setTimeout(() => {
                         const groupRows = groups[accNo];
                         
-                        // 3. Transform Rows
                         const csvRows = groupRows.map(row => 
-                            // Slice(0, -1) removes the hidden Account No from the content
                             row.slice(0, -1).map(cell => {
                                 const cellStr = (cell === null || cell === undefined) ? '' : String(cell);
                                 
-                                // --- FIX FOR SCIENTIFIC NOTATION ---
-                                // If it looks like a long number (10+ digits), wrap it in =""
-                                // This forces Excel to treat it as Text.
                                 if (/^\d{10,}$/.test(cellStr)) {
                                     return `="${cellStr}"`;
                                 }
 
-                                // Standard CSV escaping for commas, quotes, or newlines
                                 if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
                                     return `"${cellStr.replace(/"/g, '""')}"`;
                                 }
                                 return cellStr;
-                            }).join(',')
+                            }).join(',') 
                         );
 
-                        // 4. Add Headers if available
                         let csvContent;
                         if (headers && headers.length > 0) {
                             csvContent = [headers.join(','), ...csvRows].join('\n');
@@ -1010,14 +1013,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         
                         const a = document.createElement('a');
                         a.href = url;
-                        // 5. Filename includes Account Number
                         a.download = `Statement_${accNo}_${new Date().toISOString().slice(0, 10)}.csv`;
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);
                         URL.revokeObjectURL(url);
                         
-                    }, index * 1000); // 1 Second delay
+                    }, index * 1000); 
                 });
                 
                 if (accountNumbers.length > 1) {
@@ -1025,7 +1027,57 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             },
 
-            // ... inside handlers object ...
+            // NEW: Push to SAP logic
+            async pushToSAP() {
+                const data = App.state.processedData;
+                if (!data || !data.rows || data.rows.length === 0) {
+                    return App.render.showAlert('Error', 'No processed data available.', 'warning');
+                }
+                
+                const headers = data.headers; 
+                const groups = {};
+                
+                // Group rows by Account No just like the downloads
+                data.rows.forEach(row => {
+                    const accNo = row[row.length - 1] || 'Report';
+                    if (!groups[accNo]) groups[accNo] = [];
+                    groups[accNo].push(row);
+                });
+
+                const filesToPush = [];
+                const accountNumbers = Object.keys(groups);
+
+                // Build the pipe-delimited text for each file
+                accountNumbers.forEach((accNo) => {
+                    const groupRows = groups[accNo];
+                    const rowStrings = groupRows.map(row => 
+                        row.slice(0, -1).map(cell => (cell === null || cell === undefined) ? '' : String(cell)).join('|') + '|'
+                    );
+                    
+                    let fileContent;
+                    if (headers && headers.length > 0) {
+                        const headerString = headers.join('|') + '|'; 
+                        fileContent = [headerString, ...rowStrings].join('\n');
+                    } else {
+                        fileContent = rowStrings.join('\n');
+                    }
+                    
+                    const fileName = `Statement_${accNo}_${new Date().toISOString().slice(0, 10)}.txt`;
+                    filesToPush.push({ fileName, fileContent });
+                });
+
+                // Send the payload to the Python backend
+                try {
+                    const result = await App.api.pushToSAP({ files: filesToPush });
+                    if (result.success) {
+                        App.render.showAlert('Success', result.message, 'success');
+                    } else {
+                        throw new Error(result.error || 'Failed to push files.');
+                    }
+                } catch (error) {
+                    App.render.showAlert('Push Failed', error.message, 'error');
+                }
+            },
             
             async openMappingModal() {
                 try {
@@ -1132,7 +1184,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const selectedBank = App.ui.bankSelect?.value;
                 const bankAccountTypes = { 'hdfc': true, 'icici': true };
                 
-                // Fixed: Added null check to prevent the error
                 if (App.ui.accountTypeSelect) {
                     App.ui.accountTypeSelect.disabled = !bankAccountTypes[selectedBank];
                 }
@@ -1153,6 +1204,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     App.ui.resultsContainer?.classList.add('hidden', 'opacity-0');
                     if (App.ui.downloadBtn) App.ui.downloadBtn.disabled = true;
                     if (App.ui.downloadExcelBtn) App.ui.downloadExcelBtn.disabled = true;
+                    if (App.ui.pushSapBtn) App.ui.pushSapBtn.disabled = true; // NEW: Disable SAP button
                 }
 
                 switch (newState) {
@@ -1171,6 +1223,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         setTimeout(() => App.ui.resultsContainer?.classList.remove('opacity-0'), 10);
                         if (App.ui.downloadBtn) App.ui.downloadBtn.disabled = false;
                         if (App.ui.downloadExcelBtn) App.ui.downloadExcelBtn.disabled = false;
+                        if (App.ui.pushSapBtn) App.ui.pushSapBtn.disabled = false; // NEW: Enable SAP button
                         break;
                 }
             },
@@ -1196,7 +1249,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Render Body
                 if (App.ui.dataTableBody) {
                     App.ui.dataTableBody.innerHTML = data.rows.map(row => {
-                        // FIX: Only render columns corresponding to headers (ignore the hidden AccountNo)
                         const visibleCells = row.slice(0, headers.length);
                         
                         return `
@@ -1222,7 +1274,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
                 
-                // Sort mappings by account number
                 const sortedMappings = [...mappings].sort((a, b) => {
                     const accountA = String(a.accountNo || '').trim();
                     const accountB = String(b.accountNo || '').trim();
@@ -1250,7 +1301,6 @@ document.addEventListener('DOMContentLoaded', () => {
                             ${sortedMappings.map((row, index) => {
                                 const cellsHtml = displayFields.map(f => {
                                     let value = row[f.key];
-                                    // Replace database ID with sequential number
                                     if (f.key === 'id') {
                                         value = index + 1;
                                     }
@@ -1358,6 +1408,56 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }, 0);
                 }
+            },
+
+            showAccountSelectionModal(accounts, callback) {
+                const existing = document.getElementById('dynamic-account-modal');
+                if (existing) existing.remove();
+
+                const optionsHtml = accounts.map(acc => `<option value="${acc}">${acc}</option>`).join('');
+
+                const modalHtml = `
+                    <div id="dynamic-account-modal" class="fixed z-50 inset-0 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+                        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                            <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
+                            <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+                            <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                                <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                    <div class="sm:flex sm:items-start">
+                                        <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 sm:mx-0 sm:h-10 sm:w-10">
+                                            <i class="fas fa-list text-blue-600"></i>
+                                        </div>
+                                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+                                            <h3 class="text-lg leading-6 font-medium text-gray-900" id="modal-title">Masked Account Conflict</h3>
+                                            <div class="mt-2">
+                                                <p class="text-sm text-gray-500 mb-4">The file contains a masked account number that matches multiple mappings in your database. Please select the correct account:</p>
+                                                <select id="dynamic-account-select" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md">
+                                                    ${optionsHtml}
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                                    <button type="button" id="dynamic-account-confirm" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Process Data</button>
+                                    <button type="button" id="dynamic-account-cancel" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+                document.getElementById('dynamic-account-confirm').addEventListener('click', () => {
+                    const selected = document.getElementById('dynamic-account-select').value;
+                    document.getElementById('dynamic-account-modal').remove();
+                    callback(selected); 
+                });
+
+                document.getElementById('dynamic-account-cancel').addEventListener('click', () => {
+                    document.getElementById('dynamic-account-modal').remove();
+                });
             }
         }
     };

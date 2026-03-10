@@ -132,7 +132,7 @@ def clean_value(value):
     return value_str
 
 def apply_business_rules(transactions_df, mapping_info):
-    """Applies posting rules and other logic after parsing."""
+    """Applies posting rules and generates the new 10-column layout."""
     processed = []
     for _, row in transactions_df.iterrows():
         withdrawal = float(row.get('withdrawal', 0.0))
@@ -140,33 +140,41 @@ def apply_business_rules(transactions_df, mapping_info):
         if withdrawal == 0 and deposit == 0:
             continue
 
+        # Get metadata
+        company_code = "1000"
+        house_bank = mapping_info.get('houseBank', '') if mapping_info else ''
         profit_center = mapping_info.get('profitCenter', '') if mapping_info else ''
         cost_center = ''
+        closing_bal = float(row.get('closingBalance', 0.0))
 
         if deposit > 0:
             posting_rule, amount = ('H001', deposit)
         else:
-            posting_rule, amount = ('H002', -withdrawal)  # ADD NEGATIVE SIGN HERE
+            posting_rule, amount = ('H002', -withdrawal)
 
         narration = str(row.get('narration', ''))
         if 'charges' in narration.lower():
             posting_rule = 'H005'
             cost_center = f"{profit_center}comn" if profit_center else 'comn'
             profit_center = ''
-            amount = -withdrawal  # ALSO NEGATIVE FOR CHARGES
+            amount = -withdrawal
 
+        # Date processing
         date_val = pd.to_datetime(row.get('date'), errors='coerce', dayfirst=True)
-        # --- THIS IS THE CHANGE ---
         date_str = '' if pd.isna(date_val) else date_val.strftime('%d.%m.%Y')
-        # --------------------------
 
+        # Push exactly matching your required layout
         processed.append({
-            'postingRule': clean_value(posting_rule),
-            'date': clean_value(date_str),
-            'amount': f"{amount:.2f}",
-            'text': clean_value(narration),
-            'referenceId': clean_value(row.get('referenceId', '')),
-            'profitCenter': clean_value(profit_center),
-            'costCenter': clean_value(cost_center)
+            'Company Code': company_code,
+            'House Bank': house_bank,
+            'Statement Date': clean_value(date_str),
+            'Closing Bal': f"{closing_bal}",
+            'Posting Rule': clean_value(posting_rule),
+            'Posting Date': clean_value(date_str),
+            'Amount': f"{amount:.2f}",
+            'Bank ref No': clean_value(row.get('referenceId', '')),
+            'Profit Center': clean_value(profit_center),
+            'Cost Center': clean_value(cost_center),
+            'accountNo': row.get('accountNo', '') # Required to split files later
         })
     return processed

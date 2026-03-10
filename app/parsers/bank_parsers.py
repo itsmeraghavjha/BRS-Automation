@@ -4,7 +4,8 @@ import re
 import pandas as pd
 from abc import ABC, abstractmethod
 import csv 
-import io   
+import io  
+# from .base_parser import StatementParser, process_data_frame 
 
 # --- Helper function for post-header processing (used by standard parsers) ---
 def process_data_frame(df, header_row_index, index_to_std_name):
@@ -308,14 +309,15 @@ class HDFCCorporateParser(StatementParser):
 class HDFCMailParser(StatementParser):
     """
     Custom parser for HDFC statements received via Email (CSV/Excel).
-    Robustly excludes footer rows by checking both Date and Narration columns.
+    Robustly excludes footer rows by checking both Date and Narration columns,
+    and extracts the overall Closing Balance.
     """
     def parse(self):
         account_no = None
         # 1. Logic to find Account Number
         for _, row in self.df.head(30).iterrows():
             row_str = ' '.join(str(cell).strip() for cell in row.dropna())
-            match = re.search(r'Account No\s*:\s*(\d+)', row_str, re.IGNORECASE)
+            match = re.search(r'Account No\s*[:\s]*(\d+)', row_str, re.IGNORECASE)
             if match:
                 account_no = match.group(1)
                 break
@@ -326,7 +328,8 @@ class HDFCMailParser(StatementParser):
             'narration': ['narration', 'description'],
             'referenceId': ['chq', 'ref no', 'reference no', 'reference'], 
             'withdrawal': ['withdrawal amt', 'debit', 'debits'],
-            'deposit': ['deposit amt', 'credit', 'credits']
+            'deposit': ['deposit amt', 'credit', 'credits'],
+            'balance': ['balance']  # --- NEW: Map the Balance Column ---
         }
         
         header_row_index, index_to_std_name = self.find_header_row(header_keywords, min_matches=4, search_rows=30)
@@ -340,6 +343,8 @@ class HDFCMailParser(StatementParser):
         # Define keywords that indicate a footer/total row
         SKIP_KEYWORDS = ['total', 'grand total', 'closing balance', 'opening balance', 'statement summary']
 
+        final_balance = 0.0
+
         for _, row in data_df.iterrows():
             # Get raw text for checks
             date_val = str(row.get('date', '')).strip()
@@ -348,10 +353,13 @@ class HDFCMailParser(StatementParser):
             # Combine them to check for keywords globally in the row's key identifiers
             row_identifiers = (date_val + " " + narration_val).lower()
 
-            # --- THE FIX: Check both Date and Narration for "Total", "Balance", etc. ---
+            # --- NEW: Catch Closing Balance if there is an explicit footer row ---
+            if 'closing balance' in row_identifiers and 'balance' in data_df.columns:
+                bal_val = self.clean_amount(row.get('balance'))
+                if bal_val: final_balance = bal_val
+
             if any(x in row_identifiers for x in SKIP_KEYWORDS):
                 continue
-            # --------------------------------------------------------------------------
 
             # Handle multi-line descriptions (empty date but has text)
             if not date_val and narration_val:
@@ -362,6 +370,14 @@ class HDFCMailParser(StatementParser):
             withdrawal = self.clean_amount(row.get('withdrawal'))
             deposit = self.clean_amount(row.get('deposit'))
             
+            # --- NEW: Track running balance. The last one we see is the final statement balance ---
+            if 'balance' in data_df.columns:
+                curr_bal_str = str(row.get('balance', '')).strip()
+                if curr_bal_str and curr_bal_str.lower() not in ['nan', 'none', '']:
+                    curr_bal = self.clean_amount(curr_bal_str)
+                    if curr_bal != 0.0 or curr_bal_str in ['0', '0.00']:
+                        final_balance = curr_bal
+
             # Only add if there is a valid transaction
             if date_val and (withdrawal > 0 or deposit > 0):
                 transactions_list.append({
@@ -372,8 +388,11 @@ class HDFCMailParser(StatementParser):
                     'referenceId': row.get('referenceId', '')
                 })
         
+        # --- NEW: Apply the final tracked Closing Balance to all rows ---
+        for tx in transactions_list:
+            tx['closingBalance'] = final_balance
+        
         return account_no, pd.DataFrame(transactions_list)
-
 
 
 # --- ICICI Parsers ---
@@ -540,13 +559,12 @@ class ICICICorporateParser(ICICIRetailParser): # Corporate is same as Retail for
 class ICICIMailParser(StatementParser):
     """
     Parser for ICICI statements received via Email (CSV).
-    Robustly handles file preambles by hunting for the header row before parsing.
+    Robustly handles file preambles by hunting for the header row and Closing Balance.
     """
     def __init__(self, file):
         self.file = file
         self.file.seek(0)
         
-        # 1. robust decoding (handle potential Windows/Excel encoding)
         try:
             content = self.file.read().decode('utf-8', errors='ignore')
         except Exception:
@@ -558,37 +576,48 @@ class ICICIMailParser(StatementParser):
         import io
         import csv
 
-        # 2. Use newline='' to properly handle CSVs with quoted newlines
         content_file = io.StringIO(content, newline='')
         reader = csv.reader(content_file)
         
         data_rows = []
         header_found = False
         
-        # 3. Hunt for the header
+        # --- NEW: Track closing balance ---
+        self.closing_balance = 0.0
+        next_row_is_balance = False
+        
         for row in reader:
             if not row: 
                 continue
                 
-            # Convert row to a single string for keyword checking
             row_str = ' '.join(str(cell).lower().strip() for cell in row)
             
-            # Check for unique columns in your specific file format
+            # --- NEW: Extract Closing Balance ---
+            if next_row_is_balance:
+                # Find the rightmost valid number (handles empty columns in between)
+                vals = [c.strip() for c in row if c.strip()]
+                if len(vals) >= 2:
+                    try:
+                        self.closing_balance = float(vals[-1].replace(',', ''))
+                    except ValueError:
+                        pass
+                next_row_is_balance = False
+                
+            if 'opening balance' in row_str and 'closing balance' in row_str:
+                next_row_is_balance = True
+            # ------------------------------------
+
             if 'tran date' in row_str and 'tran particular' in row_str:
                 header_found = True
             
-            # Start collecting rows ONLY after we find the header (including the header itself)
             if header_found:
                 data_rows.append(row)
         
         if not data_rows:
-            # Fallback: if we didn't find the specific header, try loading everything
-            # This handles cases where the format might be slightly different but still valid
             content_file.seek(0)
             reader = csv.reader(content_file)
             data_rows = [row for row in reader if row]
 
-        # 4. Pad rows to ensure pandas doesn't crash on ragged CSVs
         if data_rows:
             try:
                 max_cols = max(len(row) for row in data_rows)
@@ -608,7 +637,6 @@ class ICICIMailParser(StatementParser):
         if self.df.empty:
              raise ValueError("ICICI Mail: parsed dataframe is empty.")
 
-        # 1. Identify Header Row (Should be at index 0 now, but we search just in case)
         header_keywords = {
             'account_col': ['account number'],
             'date': ['tran date'], 
@@ -618,13 +646,11 @@ class ICICIMailParser(StatementParser):
             'deposit': ['cr tran amt']
         }
         
-        # We reduce search_rows since we likely stripped the garbage in __init__
         header_row_index, index_to_std_name = self.find_header_row(header_keywords, min_matches=4, search_rows=10)
         
         if header_row_index == -1:
             raise ValueError("ICICI Mail header not found. Please check file format.")
 
-        # 2. Standardize DataFrame
         data_df = process_data_frame(self.df, header_row_index, index_to_std_name)
         
         transactions_list = []
@@ -634,16 +660,13 @@ class ICICIMailParser(StatementParser):
             date_val = str(row.get('date', '')).strip()
             narration = str(row.get('narration', '')).strip()
             
-            # --- SKIPPING LOGIC ---
             if '----' in date_val: continue
             if 'b/f' in narration.lower(): continue
             if any(x in narration.lower() for x in ['total', 'closing balance', 'opening balance']): continue
-            # ----------------------
 
             withdrawal = self.clean_amount(row.get('withdrawal'))
             deposit = self.clean_amount(row.get('deposit'))
             
-            # Extract Account Number
             row_account_no = None
             if has_account_col:
                 raw_acc = str(row.get('account_col', '')).strip()
@@ -658,52 +681,79 @@ class ICICIMailParser(StatementParser):
                     'narration': narration,
                     'withdrawal': withdrawal,
                     'deposit': deposit,
-                    'referenceId': str(row.get('referenceId', '')).strip()
+                    'referenceId': str(row.get('referenceId', '')).strip(),
+                    # --- NEW: Attach closing balance to every row ---
+                    'closingBalance': getattr(self, 'closing_balance', 0.0) 
                 })
         
         return 'MULTI', pd.DataFrame(transactions_list)
 
+
+
 # --- Other Parsers ---
+
+
 class BOBParser(StatementParser):
     def parse(self):
         account_no = None
+        # 1. Extract the Account Number (even if masked like 252XXXXXXXX032)
         for _, row in self.df.head(30).iterrows():
             row_str = ' '.join(str(cell).strip() for cell in row.dropna())
             match = re.search(r'Account No:.*?\s*(\S+)', row_str, re.IGNORECASE)
             if match:
-                account_no = match.group(1)
+                account_no = match.group(1).replace(",", "")
                 break
 
+        # 2. Map the Headers (Added 'balance' to track Closing Balance)
         header_keywords = {
-            'date': ['txn date', 'transaction date', 'date'], 'narration': ['description', 'particulars', 'narration'],
+            'date': ['txn date', 'transaction date', 'date'], 
+            'narration': ['description', 'particulars', 'narration'],
             'referenceId': ['reference', 'ref no', 'ref', 'chq.no.'],
-            'withdrawal': ['debit', 'withdrawal'], 'deposit': ['credit', 'deposit']
+            'withdrawal': ['debit', 'withdrawal'], 
+            'deposit': ['credit', 'deposit'],
+            'balance': ['balance']  # --- NEW ---
         }
+        
         header_row_index, index_to_std_name = self.find_header_row(header_keywords, min_matches=3)
         if header_row_index == -1:
             raise ValueError("Bank of Baroda header not found.")
 
-        # UPDATED: Use helper function
         data_df = process_data_frame(self.df, header_row_index, index_to_std_name)
 
         transactions_list = []
+        final_balance = 0.0
+
         for _, row in data_df.iterrows():
             if row.isna().all() or pd.isna(row.get('date')):
                 continue
+            
             withdrawal = self.clean_amount(row.get('withdrawal'))
             deposit = self.clean_amount(row.get('deposit'))
+            
+            # --- NEW: Track running balance ---
+            if 'balance' in data_df.columns:
+                curr_bal_str = str(row.get('balance', '')).strip()
+                if curr_bal_str and curr_bal_str.lower() not in ['nan', 'none', '']:
+                    curr_bal = self.clean_amount(curr_bal_str)
+                    if curr_bal != 0.0 or curr_bal_str in ['0', '0.00']:
+                        final_balance = curr_bal
+
             if withdrawal > 0 or deposit > 0:
                 transactions_list.append({
                     'date': row.get('date'),
                     'narration': str(row.get('narration', '')).strip(),
                     'withdrawal': withdrawal,
                     'deposit': deposit,
-                    'referenceId': row.get('referenceId', '')
+                    'referenceId': str(row.get('referenceId', '')).strip()
                 })
-        return account_no, pd.DataFrame(transactions_list)
+        
+        # Apply the final tracked Closing Balance to all rows
+        for tx in transactions_list:
+            tx['closingBalance'] = final_balance
+
+        return account_no, pd.DataFrame(transactions_list) 
 
 class KotakParser(StatementParser):
-    # --- THIS IS THE NEW, *CORRECT* FILE-READING LOGIC ---
     def __init__(self, file):
         self.file = file
         self.file.seek(0)
@@ -715,26 +765,20 @@ class KotakParser(StatementParser):
 
         self.file.seek(0)
 
-        # --- THIS IS THE FIX ---
         data_rows = []
-        # Use io.StringIO to treat the string as a file
+        import io
+        import csv
         content_file = io.StringIO(content)
-        # Use the 'csv' module to correctly parse rows
-        # This correctly handles commas inside quoted fields
         reader = csv.reader(content_file)
         
         for row in reader:
-            if not row: # Skip empty rows
-                continue
+            if not row: continue
             data_rows.append(row)
-        # ---------------------------------------------------
         
-        # We no longer need to pad, csv.reader gives full rows
-        # but we must find the max columns to be safe
         try:
             max_cols = max(len(row) for row in data_rows if row)
         except ValueError:
-            max_cols = 10 # Default
+            max_cols = 10 
             
         padded_rows = []
         for row in data_rows:
@@ -744,24 +788,18 @@ class KotakParser(StatementParser):
         self.df = pd.DataFrame(padded_rows)
         if not isinstance(self.df, pd.DataFrame):
             raise ValueError("Uploaded file could not be parsed into a DataFrame.")
-    # ---------------------------------------------------
 
-    # --- WE ADD A LOCAL clean_amount TO BE SAFE ---
     def clean_amount(self, value):
         if value is None: return 0.0
         s_value = str(value).strip()
         if not s_value: return 0.0
-        
-        # It now strips quotes *before* trying to replace commas
         s_value = s_value.strip('"').replace(',', '').replace('₹', '').replace('rs.', '').replace('Rs.', '')
-        
         s_value = s_value.replace('(', '-').replace(')', '')
         try:
             num = pd.to_numeric(s_value, errors='coerce')
             return 0.0 if pd.isna(num) else float(num)
         except Exception:
             return 0.0
-    # ---------------------------------------------------
 
     def parse(self):
         account_no = None
@@ -772,54 +810,61 @@ class KotakParser(StatementParser):
                 account_no = match.group(1)
                 break
 
-        # --- THESE ARE THE CORRECT KEYWORDS FOR THE NEW FILE ---
         header_keywords = {
-            'date': ['transaction date'],
+            'date': ['transaction date', 'date'],
             'narration': ['description'],
             'referenceId': ['chq / ref no.'],
             'amount': ['amount'],
-            'type': ['dr / cr']
+            'type': ['dr / cr'],
+            'balance': ['balance']  # --- NEW: Map the Balance Column ---
         }
         
-        # We keep min_matches=4 because it is good practice
         header_row_index, index_to_std_name = self.find_header_row(
             header_keywords, min_matches=4
         )
         if header_row_index == -1:
             raise ValueError("Kotak header not found.")
 
-        # This helper function will still work correctly
         data_df = process_data_frame(self.df, header_row_index, index_to_std_name)
         
         transactions_list = []
+        final_balance = 0.0
+
         for _, row in data_df.iterrows():
             if row.isna().all() or (pd.isna(row.get('date'))):
                  continue
             
             amount_str = row.get('amount')
-            
-            # --- REMOVED DEBUG PRINT ---
-            # print(f"[DEBUG] Raw amount_str from DataFrame: {amount_str!r}")
-            # ---------------------------
-
-            # This line now calls the LOCAL, FIXED clean_amount function
             amount = self.clean_amount(str(amount_str)) 
             
             tx_type = str(row.get('type', '')).strip().lower() 
-            
             is_debit = 'dr' in tx_type
             is_credit = 'cr' in tx_type
 
-            transactions_list.append({
-                'date': row.get('date'),
-                'narration': str(row.get('narration', '')).strip(),
-                'withdrawal': amount if is_debit else 0.0,
-                'deposit': amount if is_credit else 0.0,
-                'referenceId': str(row.get('referenceId', '')).strip()
-            })
+            # --- NEW: Track running balance ---
+            if 'balance' in data_df.columns:
+                curr_bal_str = str(row.get('balance', '')).strip()
+                if curr_bal_str and curr_bal_str.lower() not in ['nan', 'none', '']:
+                    curr_bal = self.clean_amount(curr_bal_str)
+                    if curr_bal != 0.0 or curr_bal_str in ['0', '0.00']:
+                        final_balance = curr_bal
+
+            if amount > 0:
+                transactions_list.append({
+                    'date': row.get('date'),
+                    'narration': str(row.get('narration', '')).strip(),
+                    'withdrawal': amount if is_debit else 0.0,
+                    'deposit': amount if is_credit else 0.0,
+                    'referenceId': str(row.get('referenceId', '')).strip()
+                })
+
+        # --- NEW: Apply the final tracked Closing Balance to all rows ---
+        for tx in transactions_list:
+            tx['closingBalance'] = final_balance
 
         return account_no, pd.DataFrame(transactions_list)
-    
+
+
 class UBIParser(StatementParser):
     def parse(self):
         account_no = None
@@ -831,32 +876,53 @@ class UBIParser(StatementParser):
                 break
 
         header_keywords = {
-            'date': ['tran date', 'date'], 'narration': ['description', 'remarks', 'particulars'],
-            'referenceId': ['ref no', 'cheque no', 'tran id', 'reference'],
-            'withdrawal': ['withdrawals', 'debit'], 'deposit': ['deposits', 'credit']
+            'date': ['tran date', 'date'], 
+            'narration': ['description', 'remarks', 'particulars'],
+            # Expanding reference ID search based on UBI format
+            'referenceId': ['ref no', 'cheque no', 'tran id', 'reference', 'utr number', 'instr. id'],
+            'withdrawal': ['withdrawals', 'debit'], 
+            'deposit': ['deposits', 'credit'],
+            'balance': ['balance']  # --- NEW: Map the Balance Column ---
         }
         header_row_index, index_to_std_name = self.find_header_row(header_keywords, min_matches=3)
         if header_row_index == -1:
             raise ValueError("UBI header not found.")
 
-        # UPDATED: Use helper function
         data_df = process_data_frame(self.df, header_row_index, index_to_std_name)
 
         transactions_list = []
+        final_balance = 0.0
+
         for _, row in data_df.iterrows():
             if row.isna().all() or pd.isna(row.get('date')):
                 continue
+            
             withdrawal = self.clean_amount(row.get('withdrawal'))
             deposit = self.clean_amount(row.get('deposit'))
+            
+            # --- NEW: Track running balance ---
+            if 'balance' in data_df.columns:
+                curr_bal_str = str(row.get('balance', '')).strip()
+                if curr_bal_str and curr_bal_str.lower() not in ['nan', 'none', '']:
+                    curr_bal = self.clean_amount(curr_bal_str)
+                    if curr_bal != 0.0 or curr_bal_str in ['0', '0.00']:
+                        final_balance = curr_bal
+
             if withdrawal > 0 or deposit > 0:
                 transactions_list.append({
                     'date': row.get('date'),
                     'narration': str(row.get('narration', '')).strip(),
                     'withdrawal': withdrawal,
                     'deposit': deposit,
-                    'referenceId': row.get('referenceId', '')
+                    'referenceId': str(row.get('referenceId', '')).strip()
                 })
+                
+        # --- NEW: Apply the final tracked Closing Balance to all rows ---
+        for tx in transactions_list:
+            tx['closingBalance'] = final_balance
+
         return account_no, pd.DataFrame(transactions_list)
+
 
 # --- Placeholder Parsers ---
 class SBIParser(StatementParser):
