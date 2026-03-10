@@ -898,59 +898,39 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             },
             
-            // app/static/js/main.js
-
-            // ... inside handlers object ...
-
             downloadResults() {
                 const data = App.state.processedData;
                 if (!data || !data.rows || data.rows.length === 0) {
                     return App.render.showAlert('Download Error', 'No processed data available to download.', 'warning');
                 }
                 
-                // 1. Group rows by the Account No (Hidden last column, index 7)
-                const groups = {};
-                data.rows.forEach(row => {
-                    const accNo = row[row.length - 1] || 'Report';
-                    if (!groups[accNo]) groups[accNo] = [];
-                    groups[accNo].push(row);
-                });
-
-                const accountNumbers = Object.keys(groups);
+                // --- CHANGE #2: Fix the text download ---
+                const headers = data.headers; // No fallback
                 
-                // 2. Process downloads with a DELAY (to prevent browser blocking)
-                accountNumbers.forEach((accNo, index) => {
-                    setTimeout(() => {
-                        const groupRows = groups[accNo];
-                        
-                        // 3. TRANSFORM CONTENT:
-                        // - Slice(0, -1) REMOVES the Account Number from the row content.
-                        // - Join with tabs (\t).
-                        const rowStrings = groupRows.map(row => 
-                            row.slice(0, -1).map(cell => (cell === null || cell === undefined) ? '' : String(cell)).join('\t')
-                        );
-                        
-                        // 4. NO HEADERS: Just the data rows.
-                        const fileContent = rowStrings.join('\n');
-                        
-                        const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
-                        const url = URL.createObjectURL(blob);
-                        
-                        const a = document.createElement('a');
-                        a.href = url;
-                        // 5. FILENAME: Includes the Account Number
-                        a.download = `Statement_${accNo}_${new Date().toISOString().slice(0, 10)}.txt`;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                        
-                    }, index * 1000); // 1 Second delay
-                });
+                const rows = data.rows.map(row => 
+                    row.map(cell => (cell === null || cell === undefined) ? '' : String(cell)).join('\t')
+                );
                 
-                if (accountNumbers.length > 1) {
-                    App.render.showAlert('Downloads Started', `Downloading ${accountNumbers.length} files...`, 'success');
+                let fileContent;
+                if (headers && headers.length > 0) {
+                    // Only add header if it exists
+                    const header = headers.join('\t');
+                    fileContent = [header, ...rows].join('\n');
+                } else {
+                    // Otherwise, just join the rows
+                    fileContent = rows.join('\n');
                 }
+
+                const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Processed_Statement_${new Date().toISOString().slice(0, 10)}.txt`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
             },
 
             downloadExcel() {
@@ -959,73 +939,42 @@ document.addEventListener('DOMContentLoaded', () => {
                     return App.render.showAlert('Download Error', 'No processed data available to download.', 'warning');
                 }
                 
-                const headers = data.headers; // Standard 7 headers
-
-                // 1. Group rows by the Hidden Account No (Last Column)
-                const groups = {};
-                data.rows.forEach(row => {
-                    const accNo = row[row.length - 1] || 'Report';
-                    if (!groups[accNo]) groups[accNo] = [];
-                    groups[accNo].push(row);
-                });
-
-                const accountNumbers = Object.keys(groups);
-
-                // 2. Process downloads with a DELAY
-                accountNumbers.forEach((accNo, index) => {
-                    setTimeout(() => {
-                        const groupRows = groups[accNo];
-                        
-                        // 3. Transform Rows
-                        const csvRows = groupRows.map(row => 
-                            // Slice(0, -1) removes the hidden Account No from the content
-                            row.slice(0, -1).map(cell => {
-                                const cellStr = (cell === null || cell === undefined) ? '' : String(cell);
-                                
-                                // --- FIX FOR SCIENTIFIC NOTATION ---
-                                // If it looks like a long number (10+ digits), wrap it in =""
-                                // This forces Excel to treat it as Text.
-                                if (/^\d{10,}$/.test(cellStr)) {
-                                    return `="${cellStr}"`;
-                                }
-
-                                // Standard CSV escaping for commas, quotes, or newlines
-                                if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
-                                    return `"${cellStr.replace(/"/g, '""')}"`;
-                                }
-                                return cellStr;
-                            }).join(',')
-                        );
-
-                        // 4. Add Headers if available
-                        let csvContent;
-                        if (headers && headers.length > 0) {
-                            csvContent = [headers.join(','), ...csvRows].join('\n');
-                        } else {
-                            csvContent = csvRows.join('\n');
-                        }
-
-                        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
-                        const url = URL.createObjectURL(blob);
-                        
-                        const a = document.createElement('a');
-                        a.href = url;
-                        // 5. Filename includes Account Number
-                        a.download = `Statement_${accNo}_${new Date().toISOString().slice(0, 10)}.csv`;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                        
-                    }, index * 1000); // 1 Second delay
-                });
+                // --- CHANGE #3: Fix the Excel/CSV download ---
+                const headers = data.headers; // No fallback
                 
-                if (accountNumbers.length > 1) {
-                    App.render.showAlert('Downloads Started', `Downloading ${accountNumbers.length} files...`, 'success');
-                }
-            },
+                const rows = data.rows.map(row => 
+                    row.map(cell => {
+                        const cellStr = (cell === null || cell === undefined) ? '' : String(cell);
+                        if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+                            return `"${cellStr.replace(/"/g, '""')}"`;
+                        }
+                        return cellStr;
+                    }).join(',')
+                );
 
-            // ... inside handlers object ...
+                let csvContent;
+                if (headers && headers.length > 0) {
+                    // Only add header if it exists
+                    csvContent = [
+                        headers.join(','),
+                        ...rows
+                    ].join('\n');
+                } else {
+                    // Otherwise, just join the rows
+                    csvContent = rows.join('\n');
+                }
+
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Processed_Statement_${new Date().toISOString().slice(0, 10)}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            },
             
             async openMappingModal() {
                 try {
@@ -1176,10 +1125,12 @@ document.addEventListener('DOMContentLoaded', () => {
             },
             
             renderResults(data) {
+                // --- CHANGE #4: Fix the "blank row" ---
+                // Use the headers from data, but do not provide a fallback
                 const headers = data.headers;
 
-                // Render Header
                 if (App.ui.dataTableHead) {
+                    // Only render the header row IF headers exist and the list is not empty
                     if (headers && headers.length > 0) {
                         App.ui.dataTableHead.innerHTML = `
                             <tr class="bg-gray-100 sticky top-0 z-10">
@@ -1189,19 +1140,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             </tr>
                         `;
                     } else {
+                        // Otherwise, render an empty header
                         App.ui.dataTableHead.innerHTML = '';
                     }
                 }
                 
-                // Render Body
                 if (App.ui.dataTableBody) {
                     App.ui.dataTableBody.innerHTML = data.rows.map(row => {
-                        // FIX: Only render columns corresponding to headers (ignore the hidden AccountNo)
-                        const visibleCells = row.slice(0, headers.length);
-                        
                         return `
                             <tr class="hover:bg-gray-50">
-                                ${visibleCells.map(cell => 
+                                ${row.map(cell => 
                                     `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-800">${(cell === null || cell === undefined || cell === '' || cell === 'NaN') ? '' : cell}</td>`
                                 ).join('')}
                             </tr>

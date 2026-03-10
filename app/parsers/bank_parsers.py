@@ -305,6 +305,77 @@ class HDFCCorporateParser(StatementParser):
             return 0.0
 
 
+class HDFCMailParser(StatementParser):
+    """
+    Custom parser for HDFC statements received via Email (CSV/Excel).
+    Robustly excludes footer rows by checking both Date and Narration columns.
+    """
+    def parse(self):
+        account_no = None
+        # 1. Logic to find Account Number
+        for _, row in self.df.head(30).iterrows():
+            row_str = ' '.join(str(cell).strip() for cell in row.dropna())
+            match = re.search(r'Account No\s*:\s*(\d+)', row_str, re.IGNORECASE)
+            if match:
+                account_no = match.group(1)
+                break
+
+        # 2. Logic to find Header Row
+        header_keywords = {
+            'date': ['date'], 
+            'narration': ['narration', 'description'],
+            'referenceId': ['chq', 'ref no', 'reference no', 'reference'], 
+            'withdrawal': ['withdrawal amt', 'debit', 'debits'],
+            'deposit': ['deposit amt', 'credit', 'credits']
+        }
+        
+        header_row_index, index_to_std_name = self.find_header_row(header_keywords, min_matches=4, search_rows=30)
+        if header_row_index == -1:
+            raise ValueError("HDFC Mail header not found. Please check if the format has changed.")
+
+        # 3. Standardize DataFrame
+        data_df = process_data_frame(self.df, header_row_index, index_to_std_name)
+        
+        transactions_list = []
+        # Define keywords that indicate a footer/total row
+        SKIP_KEYWORDS = ['total', 'grand total', 'closing balance', 'opening balance', 'statement summary']
+
+        for _, row in data_df.iterrows():
+            # Get raw text for checks
+            date_val = str(row.get('date', '')).strip()
+            narration_val = str(row.get('narration', '')).strip()
+            
+            # Combine them to check for keywords globally in the row's key identifiers
+            row_identifiers = (date_val + " " + narration_val).lower()
+
+            # --- THE FIX: Check both Date and Narration for "Total", "Balance", etc. ---
+            if any(x in row_identifiers for x in SKIP_KEYWORDS):
+                continue
+            # --------------------------------------------------------------------------
+
+            # Handle multi-line descriptions (empty date but has text)
+            if not date_val and narration_val:
+                if transactions_list:
+                    transactions_list[-1]['narration'] += ' ' + narration_val
+                continue
+
+            withdrawal = self.clean_amount(row.get('withdrawal'))
+            deposit = self.clean_amount(row.get('deposit'))
+            
+            # Only add if there is a valid transaction
+            if date_val and (withdrawal > 0 or deposit > 0):
+                transactions_list.append({
+                    'date': date_val,
+                    'narration': narration_val,
+                    'withdrawal': withdrawal,
+                    'deposit': deposit,
+                    'referenceId': row.get('referenceId', '')
+                })
+        
+        return account_no, pd.DataFrame(transactions_list)
+
+
+
 # --- ICICI Parsers ---
 class ICICIRetailParser(StatementParser):
     def parse(self):
@@ -349,6 +420,248 @@ class ICICIRetailParser(StatementParser):
 
 class ICICICorporateParser(ICICIRetailParser): # Corporate is same as Retail for ICICI
     pass
+
+
+# class ICICIMailParser(StatementParser):
+#     """
+#     Parser for ICICI statements received via Email (CSV).
+#     Includes custom file reading to handle text headers above the CSV table.
+#     """
+#     def __init__(self, file):
+#         # --- CUSTOM FILE READING LOGIC START ---
+#         self.file = file
+#         self.file.seek(0)
+#         try:
+#             content = self.file.read().decode('utf-8', errors='ignore')
+#         except AttributeError:
+#              self.file.seek(0)
+#              content = self.file.read().decode('utf-8', errors='ignore')
+
+#         self.file.seek(0)
+
+#         data_rows = []
+#         # Use io.StringIO to treat the string as a file stream
+#         import io
+#         import csv
+#         content_file = io.StringIO(content)
+        
+#         # specific logic to handle the text preamble
+#         reader = csv.reader(content_file)
+        
+#         for row in reader:
+#             if not row: # Skip empty rows
+#                 continue
+#             data_rows.append(row)
+        
+#         # Calculate max columns to pad rows (essential for pandas)
+#         try:
+#             max_cols = max(len(row) for row in data_rows if row)
+#         except ValueError:
+#             max_cols = 15 # Fallback default
+            
+#         padded_rows = []
+#         for row in data_rows:
+#             padded = row + [pd.NA] * (max_cols - len(row))
+#             padded_rows.append(padded)
+
+#         self.df = pd.DataFrame(padded_rows)
+#         # --- CUSTOM FILE READING LOGIC END ---
+
+#     def parse(self):
+#         account_no = None
+#         # 1. Logic to find Account Number (Scans first 20 rows)
+#         for _, row in self.df.head(20).iterrows():
+#             for cell in row:
+#                 s_cell = str(cell).strip()
+#                 match = re.search(r'Ac No\s*[:\s-]*(\d+)', s_cell, re.IGNORECASE)
+#                 if match:
+#                     account_no = match.group(1)
+#                     break
+#             if account_no:
+#                 break
+
+#         # 2. Logic to find Header Row
+#         header_keywords = {
+#             'date': ['tran date'], 
+#             'narration': ['tran particular'],
+#             'referenceId': ['tran remarks'],
+#             'withdrawal': ['dr tran amt'],
+#             'deposit': ['cr tran amt']
+#         }
+        
+#         header_row_index, index_to_std_name = self.find_header_row(header_keywords, min_matches=4, search_rows=20)
+#         if header_row_index == -1:
+#             raise ValueError("ICICI Mail header not found. Please check file format.")
+
+#         # 3. Standardize DataFrame
+#         data_df = process_data_frame(self.df, header_row_index, index_to_std_name)
+        
+#         transactions_list = []
+#         for _, row in data_df.iterrows():
+#             # Get values
+#             date_val = str(row.get('date', '')).strip()
+#             narration = str(row.get('narration', '')).strip()
+            
+#             # --- SKIPPING LOGIC ---
+#             # 1. Skip separator lines (e.g., "-------")
+#             if '----' in date_val:
+#                 continue
+            
+#             # 2. Skip Brought Forward (B/F) rows
+#             if 'b/f' in narration.lower():
+#                 continue
+
+#             # 3. Skip Totals/Footer rows
+#             if any(x in narration.lower() for x in ['total', 'closing balance', 'opening balance']):
+#                 continue
+#             # ----------------------
+
+#             withdrawal = self.clean_amount(row.get('withdrawal'))
+#             deposit = self.clean_amount(row.get('deposit'))
+            
+#             # Add valid transactions
+#             if date_val and (withdrawal > 0 or deposit > 0):
+#                 transactions_list.append({
+#                     'date': date_val,
+#                     'narration': narration,
+#                     'withdrawal': withdrawal,
+#                     'deposit': deposit,
+#                     'referenceId': str(row.get('referenceId', '')).strip()
+#                 })
+        
+#         return account_no, pd.DataFrame(transactions_list)
+
+
+
+
+# app/parsers/bank_parsers.py
+
+
+class ICICIMailParser(StatementParser):
+    """
+    Parser for ICICI statements received via Email (CSV).
+    Robustly handles file preambles by hunting for the header row before parsing.
+    """
+    def __init__(self, file):
+        self.file = file
+        self.file.seek(0)
+        
+        # 1. robust decoding (handle potential Windows/Excel encoding)
+        try:
+            content = self.file.read().decode('utf-8', errors='ignore')
+        except Exception:
+            self.file.seek(0)
+            content = self.file.read().decode('cp1252', errors='ignore')
+
+        self.file.seek(0)
+        
+        import io
+        import csv
+
+        # 2. Use newline='' to properly handle CSVs with quoted newlines
+        content_file = io.StringIO(content, newline='')
+        reader = csv.reader(content_file)
+        
+        data_rows = []
+        header_found = False
+        
+        # 3. Hunt for the header
+        for row in reader:
+            if not row: 
+                continue
+                
+            # Convert row to a single string for keyword checking
+            row_str = ' '.join(str(cell).lower().strip() for cell in row)
+            
+            # Check for unique columns in your specific file format
+            if 'tran date' in row_str and 'tran particular' in row_str:
+                header_found = True
+            
+            # Start collecting rows ONLY after we find the header (including the header itself)
+            if header_found:
+                data_rows.append(row)
+        
+        if not data_rows:
+            # Fallback: if we didn't find the specific header, try loading everything
+            # This handles cases where the format might be slightly different but still valid
+            content_file.seek(0)
+            reader = csv.reader(content_file)
+            data_rows = [row for row in reader if row]
+
+        # 4. Pad rows to ensure pandas doesn't crash on ragged CSVs
+        if data_rows:
+            try:
+                max_cols = max(len(row) for row in data_rows)
+            except ValueError:
+                max_cols = 1
+                
+            padded_rows = []
+            for row in data_rows:
+                padded = row + [pd.NA] * (max_cols - len(row))
+                padded_rows.append(padded)
+            
+            self.df = pd.DataFrame(padded_rows)
+        else:
+            self.df = pd.DataFrame()
+
+    def parse(self):
+        if self.df.empty:
+             raise ValueError("ICICI Mail: parsed dataframe is empty.")
+
+        # 1. Identify Header Row (Should be at index 0 now, but we search just in case)
+        header_keywords = {
+            'account_col': ['account number'],
+            'date': ['tran date'], 
+            'narration': ['tran particular'],
+            'referenceId': ['tran remarks'],
+            'withdrawal': ['dr tran amt'],
+            'deposit': ['cr tran amt']
+        }
+        
+        # We reduce search_rows since we likely stripped the garbage in __init__
+        header_row_index, index_to_std_name = self.find_header_row(header_keywords, min_matches=4, search_rows=10)
+        
+        if header_row_index == -1:
+            raise ValueError("ICICI Mail header not found. Please check file format.")
+
+        # 2. Standardize DataFrame
+        data_df = process_data_frame(self.df, header_row_index, index_to_std_name)
+        
+        transactions_list = []
+        has_account_col = 'account_col' in data_df.columns
+
+        for _, row in data_df.iterrows():
+            date_val = str(row.get('date', '')).strip()
+            narration = str(row.get('narration', '')).strip()
+            
+            # --- SKIPPING LOGIC ---
+            if '----' in date_val: continue
+            if 'b/f' in narration.lower(): continue
+            if any(x in narration.lower() for x in ['total', 'closing balance', 'opening balance']): continue
+            # ----------------------
+
+            withdrawal = self.clean_amount(row.get('withdrawal'))
+            deposit = self.clean_amount(row.get('deposit'))
+            
+            # Extract Account Number
+            row_account_no = None
+            if has_account_col:
+                raw_acc = str(row.get('account_col', '')).strip()
+                match = re.search(r'(\d+)', raw_acc)
+                if match:
+                    row_account_no = match.group(1)
+
+            if date_val and (withdrawal > 0 or deposit > 0):
+                transactions_list.append({
+                    'accountNo': row_account_no,
+                    'date': date_val,
+                    'narration': narration,
+                    'withdrawal': withdrawal,
+                    'deposit': deposit,
+                    'referenceId': str(row.get('referenceId', '')).strip()
+                })
+        
+        return 'MULTI', pd.DataFrame(transactions_list)
 
 # --- Other Parsers ---
 class BOBParser(StatementParser):

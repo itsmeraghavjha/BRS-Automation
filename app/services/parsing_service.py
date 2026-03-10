@@ -88,11 +88,11 @@
 # app/services/parsing_service.py
 import re
 import pandas as pd
-from app.parsers.bank_parsers import HDFCRetailParser, HDFCCorporateParser, ICICIRetailParser, ICICICorporateParser, BOBParser, KotakParser, UBIParser
+from app.parsers.bank_parsers import HDFCRetailParser, HDFCCorporateParser, ICICIRetailParser, ICICICorporateParser, BOBParser, KotakParser, UBIParser, HDFCMailParser, ICICIMailParser
 
 parsers = {
-    'hdfc': {'retail': HDFCRetailParser, 'corporate': HDFCCorporateParser},
-    'icici': {'retail': ICICIRetailParser, 'corporate': ICICICorporateParser},
+    'hdfc': {'retail': HDFCRetailParser, 'corporate': HDFCCorporateParser, 'mail': HDFCMailParser},
+    'icici': {'retail': ICICIRetailParser, 'corporate': ICICICorporateParser, 'mail': ICICIMailParser},
     'bob': BOBParser,
     'kotak': KotakParser,
     'ubi': UBIParser

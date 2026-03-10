@@ -13,6 +13,82 @@ def index():
     """Renders the main homepage."""
     return render_template('index.html', title='Home', current_user=current_user)
 
+# @main_bp.route('/process', methods=['POST'])
+# def process_statement_file():
+#     print("--- SERVER: process_statement_file function has been entered ---")
+#     """Handles the bank statement file upload and processing."""
+#     if 'statement' not in request.files:
+#         return jsonify({'error': 'No file provided'}), 400
+
+#     file = request.files['statement']
+#     bank_name = request.form.get('bank', '').strip()
+#     account_type = request.form.get('account_type', 'retail').strip()
+    
+#     if not bank_name:
+#         return jsonify({'error': 'Bank name is required.'}), 400
+
+#     try:
+#         # 1. Call the Parsing Service to get raw data from the uploaded file
+#         account_no, transactions_df = parsing_service.parse_file(bank_name, account_type, file)
+        
+#         # --- THIS IS THE DEBUGGING CODE ---
+#         print("\n--- DEBUG: Parsed DataFrame from bank_parsers ---")
+#         print(transactions_df.to_string())
+#         print("------------------------------------------------\n")
+#         # ------------------------------------
+
+#         if not account_no:
+#              return jsonify({'error': 'Could not find account number in statement.'}), 400
+        
+#         # 2. Call the Mapping Service to get mapping info from the database
+#         mapping_info = mapping_service.find_mapping_for_account(account_no)
+
+#         # 3. Call the Parsing Service again to apply business rules and finalize the data
+#         # This returns a list of dictionaries
+#         processed_data_list = parsing_service.apply_business_rules(transactions_df, mapping_info)
+
+#         # 4. Convert list of dicts to the rows/headers structure expected by the frontend
+#         if not processed_data_list:
+#              # MODIFIED: Send headers: [] back to prevent JS error
+#              return jsonify({'rows': [], 'headers': []})
+
+#         # MODIFIED: Set headers to an empty list
+#         headers = []
+        
+#         # Convert list of dicts to list of lists
+#         rows = []
+#         for d in processed_data_list:
+#             row = [
+#                 d.get('postingRule', ''),
+#                 d.get('date', ''),
+#                 d.get('amount', ''),
+#                 d.get('text', ''),
+#                 d.get('referenceId', ''),
+#                 d.get('profitCenter', ''),
+#                 d.get('costCenter', '')
+#             ]
+#             rows.append(row)
+
+#         # MODIFIED: Return JSON with 'rows' and 'headers' (as empty list)
+#         processed_json = {
+#             'rows': rows,
+#             'headers': headers
+#         }
+
+#         return jsonify(processed_json) # Return the correctly structured data
+
+#     except Exception as e:
+#         # If any error occurs during parsing or processing, print it to the terminal
+#         # and send a JSON error message back to the frontend.
+#         traceback.print_exc()
+#         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
+
+
+
+# app/main/routes.py
+
+# ... (imports remain same) ...
+
 @main_bp.route('/process', methods=['POST'])
 def process_statement_file():
     print("--- SERVER: process_statement_file function has been entered ---")
@@ -28,34 +104,51 @@ def process_statement_file():
         return jsonify({'error': 'Bank name is required.'}), 400
 
     try:
-        # 1. Call the Parsing Service to get raw data from the uploaded file
+        # 1. Call the Parsing Service
+        # returns 'MULTI' string as account_no if multiple accounts detected in one file
         account_no, transactions_df = parsing_service.parse_file(bank_name, account_type, file)
         
-        # --- THIS IS THE DEBUGGING CODE ---
-        print("\n--- DEBUG: Parsed DataFrame from bank_parsers ---")
-        print(transactions_df.to_string())
-        print("------------------------------------------------\n")
-        # ------------------------------------
+        processed_data_list = []
 
-        if not account_no:
-             return jsonify({'error': 'Could not find account number in statement.'}), 400
-        
-        # 2. Call the Mapping Service to get mapping info from the database
-        mapping_info = mapping_service.find_mapping_for_account(account_no)
+        # --- LOGIC: Handle Multi-Account vs Single Account Files ---
+        if account_no == 'MULTI':
+            # Safety check: Ensure the parser actually added the 'accountNo' column
+            if 'accountNo' not in transactions_df.columns:
+                 return jsonify({'error': 'Multi-account parsing failed: No account column found.'}), 400
+            
+            # Group data by the extracted account number
+            grouped = transactions_df.groupby('accountNo')
+            
+            for acct, group_df in grouped:
+                # Get Mapping for THIS specific account
+                mapping_info = mapping_service.find_mapping_for_account(acct)
+                
+                # Apply Rules for THIS specific account subset
+                subset_processed = parsing_service.apply_business_rules(group_df, mapping_info)
+                
+                # Inject Account Number back into the results dict so we can pack it later
+                for item in subset_processed:
+                    item['accountNo'] = acct
+                    processed_data_list.extend([item])
+                    
+        else:
+            # Standard Logic: Single Account
+            mapping_info = mapping_service.find_mapping_for_account(account_no)
+            processed_data_list = parsing_service.apply_business_rules(transactions_df, mapping_info)
+            
+            # Inject the single account number for consistency
+            for item in processed_data_list:
+                item['accountNo'] = account_no
 
-        # 3. Call the Parsing Service again to apply business rules and finalize the data
-        # This returns a list of dictionaries
-        processed_data_list = parsing_service.apply_business_rules(transactions_df, mapping_info)
-
-        # 4. Convert list of dicts to the rows/headers structure expected by the frontend
+        # 2. Format for Frontend
         if not processed_data_list:
-             # MODIFIED: Send headers: [] back to prevent JS error
              return jsonify({'rows': [], 'headers': []})
 
-        # MODIFIED: Set headers to an empty list
-        headers = []
+        # --- CRITICAL CONFIGURATION ---
+        # Headers: We only send the STANDARD 7 headers. 
+        # The frontend table will only render these 7 columns.
+        headers = ["Posting Rule", "Date", "Amount", "Narration", "Reference ID", "Profit Center", "Cost Center"]
         
-        # Convert list of dicts to list of lists
         rows = []
         for d in processed_data_list:
             row = [
@@ -65,20 +158,21 @@ def process_statement_file():
                 d.get('text', ''),
                 d.get('referenceId', ''),
                 d.get('profitCenter', ''),
-                d.get('costCenter', '')
+                d.get('costCenter', ''),
+                # --- HIDDEN COLUMN (Index 7) ---
+                # This is the 8th item. It will NOT be shown in the table (because headers has length 7).
+                # But it IS available in the data for the 'Download' button to split files.
+                d.get('accountNo', 'Report') 
             ]
             rows.append(row)
 
-        # MODIFIED: Return JSON with 'rows' and 'headers' (as empty list)
         processed_json = {
             'rows': rows,
             'headers': headers
         }
 
-        return jsonify(processed_json) # Return the correctly structured data
+        return jsonify(processed_json)
 
     except Exception as e:
-        # If any error occurs during parsing or processing, print it to the terminal
-        # and send a JSON error message back to the frontend.
         traceback.print_exc()
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
