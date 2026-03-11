@@ -695,8 +695,11 @@ class ICICIMailParser(StatementParser):
 
 class BOBParser(StatementParser):
     def parse(self):
+        import re
+        import pandas as pd
+        
         account_no = None
-        # 1. Extract the Account Number (even if masked like 252XXXXXXXX032)
+        # 1. Extract the Account Number 
         for _, row in self.df.head(30).iterrows():
             row_str = ' '.join(str(cell).strip() for cell in row.dropna())
             match = re.search(r'Account No:.*?\s*(\S+)', row_str, re.IGNORECASE)
@@ -704,14 +707,14 @@ class BOBParser(StatementParser):
                 account_no = match.group(1).replace(",", "")
                 break
 
-        # 2. Map the Headers (Added 'balance' to track Closing Balance)
+        # 2. Map the Headers 
         header_keywords = {
-            'date': ['txn date', 'transaction date', 'date'], 
+            'date': ['tran date', 'txn date', 'transaction date', 'date'], 
             'narration': ['description', 'particulars', 'narration'],
             'referenceId': ['reference', 'ref no', 'ref', 'chq.no.'],
             'withdrawal': ['debit', 'withdrawal'], 
             'deposit': ['credit', 'deposit'],
-            'balance': ['balance']  # --- NEW ---
+            'balance': ['balance']  
         }
         
         header_row_index, index_to_std_name = self.find_header_row(header_keywords, min_matches=3)
@@ -721,37 +724,55 @@ class BOBParser(StatementParser):
         data_df = process_data_frame(self.df, header_row_index, index_to_std_name)
 
         transactions_list = []
-        final_balance = 0.0
+        target_balance = None  
 
         for _, row in data_df.iterrows():
-            if row.isna().all() or pd.isna(row.get('date')):
+            date_val = str(row.get('date', '')).strip()
+            
+            # Strict date check (ignores footers)
+            if not re.search(r'\d{2}[-/]\d{2}[-/]\d{2,4}', date_val):
                 continue
             
             withdrawal = self.clean_amount(row.get('withdrawal'))
             deposit = self.clean_amount(row.get('deposit'))
             
-            # --- NEW: Track running balance ---
-            if 'balance' in data_df.columns:
+            # --- FIX: Grab the FIRST balance and apply '-' for Dr and '+' for Cr ---
+            if target_balance is None and 'balance' in data_df.columns:
                 curr_bal_str = str(row.get('balance', '')).strip()
                 if curr_bal_str and curr_bal_str.lower() not in ['nan', 'none', '']:
-                    curr_bal = self.clean_amount(curr_bal_str)
-                    if curr_bal != 0.0 or curr_bal_str in ['0', '0.00']:
-                        final_balance = curr_bal
+                    
+                    # Check if it contains 'Dr' (Debit) before stripping
+                    is_debit = 'dr' in curr_bal_str.lower()
+                    
+                    # Strip letters, spaces, and commas to get the raw number
+                    clean_bal_str = re.sub(r'[^\d.-]', '', curr_bal_str)
+                    if clean_bal_str:
+                        try:
+                            val = float(clean_bal_str)
+                            # Apply negative sign if it's a Debit (Dr), otherwise keep it positive
+                            target_balance = -abs(val) if is_debit else abs(val)
+                        except ValueError:
+                            pass
 
             if withdrawal > 0 or deposit > 0:
                 transactions_list.append({
-                    'date': row.get('date'),
+                    'date': date_val,
                     'narration': str(row.get('narration', '')).strip(),
                     'withdrawal': withdrawal,
                     'deposit': deposit,
                     'referenceId': str(row.get('referenceId', '')).strip()
                 })
         
-        # Apply the final tracked Closing Balance to all rows
-        for tx in transactions_list:
-            tx['closingBalance'] = final_balance
+        # If the balance column is completely empty, fallback to 0.0
+        if target_balance is None:
+            target_balance = 0.0
 
-        return account_no, pd.DataFrame(transactions_list) 
+        # Apply the exact FIRST balance with correct signs to all rows
+        for tx in transactions_list:
+            tx['closingBalance'] = target_balance
+
+        return account_no, pd.DataFrame(transactions_list)
+
 
 class KotakParser(StatementParser):
     def __init__(self, file):

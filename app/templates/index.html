@@ -147,18 +147,31 @@
         <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
             <div class="fixed inset-0 transition-opacity" aria-hidden="true"><div class="absolute inset-0 bg-gray-500 opacity-75"></div></div>
             <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-            <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-6xl sm:w-full">
+            
+            <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-[95vw] sm:w-full">
                 <div class="bg-white px-6 pt-5 pb-4 sm:p-6 sm:pb-4">
-                    <div class="flex justify-between items-center">
-                        <h3 class="text-xl leading-6 font-bold text-gray-900" id="modal-title">Manage Account Mappings</h3>
-                        <button id="add-new-mapping-btn" class="main-button text-white font-semibold py-2 px-4 rounded-lg flex items-center space-x-2">
+                    
+                    <div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
+                        <h3 class="text-xl leading-6 font-bold text-gray-900 whitespace-nowrap" id="modal-title">Manage Account Mappings</h3>
+                        
+                        <div class="flex-grow max-w-md w-full">
+                            <div class="relative">
+                                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                    <i class="fas fa-search text-gray-400"></i>
+                                </div>
+                                <input type="text" id="mapping-search" class="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-green-600 focus:border-green-600 sm:text-sm" placeholder="Search accounts, banks, owners, centers...">
+                            </div>
+                        </div>
+
+                        <button id="add-new-mapping-btn" class="main-button text-white font-semibold py-2 px-4 rounded-lg flex items-center space-x-2 whitespace-nowrap">
                             <i class="fas fa-plus"></i>
                             <span>Add New Mapping</span>
                         </button>
                     </div>
-                    <div id="mapping-table-container" class="mt-4 table-container border border-gray-200 rounded-lg"></div>
+                    
+                    <div id="mapping-table-container" class="mt-4 table-container border border-gray-200 rounded-lg max-h-[70vh] overflow-y-auto"></div>
                 </div>
-                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
                     <button type="button" data-close-modal="mapping-modal" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:mt-0 sm:w-auto sm:text-sm">Close</button>
                 </div>
             </div>
@@ -169,44 +182,74 @@
         <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
             <div class="fixed inset-0 transition-opacity" aria-hidden="true"><div class="absolute inset-0 bg-gray-500 opacity-75"></div></div>
             <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-            <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full">
-                <form id="mapping-form">
+            
+            <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full">
+                <form id="mapping-form" data-editing-id="">
+                    <input type="hidden" id="original-account-no" name="originalAccountNo">
+                    
                     <div class="bg-white px-4 pt-5 pb-4 sm:p-8">
-                        <div class="flex items-center space-x-3 mb-6">
+                        <div class="flex items-center space-x-3 mb-4">
                             <i id="form-modal-icon" class="fas fa-plus-circle text-2xl text-green-700"></i>
                             <h3 class="text-xl leading-6 font-bold text-gray-900" id="form-modal-title">Add New Mapping</h3>
                         </div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <input type="hidden" id="original-account-no">
-                            <div>
-                                <label for="accountNo" class="block text-sm font-medium text-gray-700">Account Number</label>
-                                <input type="text" id="accountNo" name="accountNo" class="form-input mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-50 p-3" required>
-                            </div>
-                            <div>
-                                <label for="profitCenter" class="block text-sm font-medium text-gray-700">Profit Center</label>
-                                <input type="text" id="profitCenter" name="profitCenter" class="form-input mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-50 p-3">
-                            </div>
-                            <div>
-                                <label for="costCenter" class="block text-sm font-medium text-gray-700">Cost Center</label>
-                                <input type="text" id="costCenter" name="costCenter" class="form-input mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-50 p-3">
-                            </div>
-                            <div>
-                                <label for="branchName" class="block text-sm font-medium text-gray-700">Branch Name</label>
-                                <input type="text" id="branchName" name="branchName" class="form-input mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-50 p-3">
-                            </div>
-                            <div>
-                                <label for="owner" class="block text-sm font-medium text-gray-700">Owner</label>
-                                <input type="text" id="owner" name="owner" class="form-input mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-50 p-3">
-                            </div>
-                            <div>
-                                <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
-                                <input type="email" id="email" name="email" class="form-input mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-50 p-3">
+                        
+                        <div class="max-h-[65vh] overflow-y-auto pr-4 pb-2">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Bank Account No. *</label>
+                                    <input type="text" name="accountNo" required class="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md p-2 border">
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Bank Name</label>
+                                    <input type="text" name="bankName" class="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md p-2 border">
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">House Bank</label>
+                                    <input type="text" name="houseBank" class="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md p-2 border">
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Branch Name</label>
+                                    <input type="text" name="branchName" class="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md p-2 border">
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Bank G/L Account</label>
+                                    <input type="text" name="bankGL" class="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md p-2 border">
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Profit Center</label>
+                                    <input type="text" name="profitCenter" class="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md p-2 border">
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Cost Center</label>
+                                    <input type="text" name="costCenter" class="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md p-2 border">
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Owner Name</label>
+                                    <input type="text" name="owner" class="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md p-2 border">
+                                </div>
+
+                                <div class="md:col-span-2">
+                                    <label class="block text-sm font-medium text-gray-700">Email Address</label>
+                                    <input type="email" name="email" class="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md p-2 border">
+                                </div>
                             </div>
                         </div>
                     </div>
-                    <div class="bg-gray-50 px-4 py-4 sm:px-6 sm:flex sm:flex-row-reverse">
-                        <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 main-button text-base font-medium text-white sm:ml-3 sm:w-auto sm:text-sm">Save Mapping</button>
-                        <button type="button" data-close-modal="mapping-form-modal" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:mt-0 sm:w-auto sm:text-sm">Cancel</button>
+                    
+                    <div class="bg-gray-50 px-4 py-4 sm:px-6 sm:flex sm:flex-row-reverse border-t border-gray-200">
+                        <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">
+                            Save Mapping
+                        </button>
+                        <button type="button" data-close-modal="mapping-form-modal" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:w-auto sm:text-sm">
+                            Cancel
+                        </button>
                     </div>
                 </form>
             </div>

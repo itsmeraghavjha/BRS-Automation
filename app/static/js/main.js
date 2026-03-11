@@ -645,6 +645,7 @@
 // app/static/js/main.js
 // app/static/js/main.js
 // app/static/js/main.js
+// app/static/js/main.js
 document.addEventListener('DOMContentLoaded', () => {
     const App = {
         state: {
@@ -652,6 +653,12 @@ document.addEventListener('DOMContentLoaded', () => {
             currentFile: null, 
             processedData: null, 
             currentConfirmCallback: null, 
+            
+            // NEW: State for Search and Sort
+            mappingsData: [], 
+            mappingSearchQuery: '',
+            mappingSortConfig: { key: 'accountNo', direction: 'asc' },
+
             mappingFields: [
                 'accountNo', 'profitCenter', 'costCenter', 'branchName', 'owner', 'email',
                 'houseBank', 'bankGL', 'bankName' 
@@ -672,21 +679,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         init() {
             this.cacheDOMElements();
-            
-            // Debug check for missing elements
-            console.log('Initialized elements:', {
-                bankSelect: !!this.ui.bankSelect,
-                accountTypeSelect: !!this.ui.accountTypeSelect,
-                dropZone: !!this.ui.dropZone,
-                fileInput: !!this.ui.fileInput
-            });
-            
             this.bindEvents();
             if (this.ui.bankSelect) this.handlers.handleBankSelection();
         },
 
         cacheDOMElements() {
-            // Main page elements
             this.ui.bankSelect = document.getElementById('bank-select');
             this.ui.accountTypeSelect = document.getElementById('account-type-select');
             this.ui.dropZone = document.getElementById('drop-zone');
@@ -695,7 +692,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.ui.clearFileBtn = document.getElementById('clear-file-btn');
             this.ui.downloadBtn = document.getElementById('download-btn');
             this.ui.downloadExcelBtn = document.getElementById('download-excel-btn');
-            this.ui.pushSapBtn = document.getElementById('push-sap-btn'); // NEW: Added Push to SAP button
+            this.ui.pushSapBtn = document.getElementById('push-sap-btn'); 
             this.ui.fileNameDisplay = document.getElementById('file-name');
             this.ui.bankNameDisplay = document.getElementById('bank-name-display');
             this.ui.uploadInitialState = document.getElementById('upload-initial-state');
@@ -706,18 +703,16 @@ document.addEventListener('DOMContentLoaded', () => {
             this.ui.dataTableHead = document.getElementById('data-table-head');
             this.ui.statusText = document.getElementById('status-text');
             
-            // Modal related elements
             this.ui.manageMappingsBtn = document.getElementById('manage-mappings-btn');
             this.ui.mappingModal = document.getElementById('mapping-modal');
             this.ui.mappingTableContainer = document.getElementById('mapping-table-container');
             this.ui.addNewMappingBtn = document.getElementById('add-new-mapping-btn');
+            this.ui.mappingSearch = document.getElementById('mapping-search'); // NEW: Search Input
             
-            // Form Modal elements
             this.ui.mappingFormModal = document.getElementById('mapping-form-modal');
             this.ui.mappingForm = document.getElementById('mapping-form');
             this.ui.formModalTitle = document.getElementById('form-modal-title');
             
-            // Alert Modal elements
             this.ui.alertModal = document.getElementById('alert-modal');
             this.ui.alertTitle = document.getElementById('alert-title');
             this.ui.alertMessage = document.getElementById('alert-message');
@@ -726,28 +721,28 @@ document.addEventListener('DOMContentLoaded', () => {
         },
 
         bindEvents() {
-            // Mapping Management Events
             this.ui.manageMappingsBtn?.addEventListener('click', () => this.handlers.openMappingModal());
             this.ui.addNewMappingBtn?.addEventListener('click', () => this.handlers.openMappingForm(null));
             this.ui.mappingForm?.addEventListener('submit', (e) => this.handlers.saveMapping(e));
             this.ui.mappingTableContainer?.addEventListener('click', (e) => this.handlers.handleMappingTableClicks(e));
             this.ui.bankSelect?.addEventListener('change', () => this.handlers.handleBankSelection());
 
-            // FILE UPLOAD BINDINGS
+            // NEW: Search and Sort Event Listeners
+            this.ui.mappingSearch?.addEventListener('input', (e) => this.handlers.handleMappingSearch(e));
+            document.addEventListener('sort-mapping', (e) => this.handlers.handleMappingSort(e.detail));
+
             this.ui.dropZone?.addEventListener('click', () => this.ui.fileInput.click()); 
             this.ui.fileInput?.addEventListener('change', (e) => this.handlers.handleFileSelect(e.target.files)); 
             this.ui.clearFileBtn?.addEventListener('click', () => this.handlers.clearFile()); 
             this.ui.processBtn?.addEventListener('click', () => this.handlers.processStatement()); 
             this.ui.downloadBtn?.addEventListener('click', () => this.handlers.downloadResults()); 
             this.ui.downloadExcelBtn?.addEventListener('click', () => this.handlers.downloadExcel());
-            this.ui.pushSapBtn?.addEventListener('click', () => this.handlers.pushToSAP()); // NEW: Added listener for SAP button
+            this.ui.pushSapBtn?.addEventListener('click', () => this.handlers.pushToSAP()); 
 
-            // Drop Zone Drag Events
             this.ui.dropZone?.addEventListener('dragover', (e) => this.handlers.handleDragOver(e));
             this.ui.dropZone?.addEventListener('dragleave', (e) => this.handlers.handleDragLeave(e));
             this.ui.dropZone?.addEventListener('drop', (e) => this.handlers.handleDrop(e));
             
-            // MODAL CLOSE BINDINGS
             const delegateModalClose = (modalElement, modalId) => {
                 modalElement?.addEventListener('click', (e) => {
                     const closeButton = e.target.closest(`[data-close-modal="${modalId}"]`);
@@ -802,7 +797,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 return result;
             },
-            // NEW: Added API call for Push to SAP
             async pushToSAP(payload) {
                 const response = await fetch('/push-to-sap', { 
                     method: 'POST', 
@@ -892,7 +886,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!result) throw new Error('Empty response from server');
 
                     if (result.status === 'multiple_accounts') {
-                        App.render.updateUploadState('selected'); // Stop spinner
+                        App.render.updateUploadState('selected'); 
                         App.render.showAccountSelectionModal(result.accounts, (chosenAccount) => {
                             App.handlers.processStatement(chosenAccount);
                         });
@@ -921,9 +915,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 
                 const headers = data.headers; 
-                
-                // Group rows by Account No
                 const groups = {};
+                
                 data.rows.forEach(row => {
                     const accNo = row[row.length - 1] || 'Report';
                     if (!groups[accNo]) groups[accNo] = [];
@@ -936,14 +929,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     setTimeout(() => {
                         const groupRows = groups[accNo];
                         
-                        // Use Pipe delimiter AND add one at the very end
                         const rowStrings = groupRows.map(row => 
                             row.slice(0, -1).map(cell => (cell === null || cell === undefined) ? '' : String(cell)).join('|') + '|'
                         );
                         
                         let fileContent;
                         if (headers && headers.length > 0) {
-                            // Add a pipe at the end of the header row too
                             const headerString = headers.join('|') + '|'; 
                             fileContent = [headerString, ...rowStrings].join('\n');
                         } else {
@@ -972,8 +963,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 
                 const headers = data.headers;
-
                 const groups = {};
+                
                 data.rows.forEach(row => {
                     const accNo = row[row.length - 1] || 'Report';
                     if (!groups[accNo]) groups[accNo] = [];
@@ -989,11 +980,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         const csvRows = groupRows.map(row => 
                             row.slice(0, -1).map(cell => {
                                 const cellStr = (cell === null || cell === undefined) ? '' : String(cell);
-                                
                                 if (/^\d{10,}$/.test(cellStr)) {
                                     return `="${cellStr}"`;
                                 }
-
                                 if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
                                     return `"${cellStr.replace(/"/g, '""')}"`;
                                 }
@@ -1027,7 +1016,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             },
 
-            // NEW: Push to SAP logic
             async pushToSAP() {
                 const data = App.state.processedData;
                 if (!data || !data.rows || data.rows.length === 0) {
@@ -1037,7 +1025,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const headers = data.headers; 
                 const groups = {};
                 
-                // Group rows by Account No just like the downloads
                 data.rows.forEach(row => {
                     const accNo = row[row.length - 1] || 'Report';
                     if (!groups[accNo]) groups[accNo] = [];
@@ -1047,7 +1034,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const filesToPush = [];
                 const accountNumbers = Object.keys(groups);
 
-                // Build the pipe-delimited text for each file
                 accountNumbers.forEach((accNo) => {
                     const groupRows = groups[accNo];
                     const rowStrings = groupRows.map(row => 
@@ -1066,7 +1052,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     filesToPush.push({ fileName, fileContent });
                 });
 
-                // Send the payload to the Python backend
                 try {
                     const result = await App.api.pushToSAP({ files: filesToPush });
                     if (result.success) {
@@ -1079,10 +1064,32 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             },
             
+            // NEW: Search and Sort Handlers
+            handleMappingSearch(e) {
+                App.state.mappingSearchQuery = e.target.value.toLowerCase();
+                App.render.renderMappingTable();
+            },
+
+            handleMappingSort(key) {
+                let direction = 'asc';
+                if (App.state.mappingSortConfig.key === key && App.state.mappingSortConfig.direction === 'asc') {
+                    direction = 'desc';
+                }
+                App.state.mappingSortConfig = { key, direction };
+                App.render.renderMappingTable();
+            },
+
             async openMappingModal() {
                 try {
                     const mappings = await App.api.getMappings();
-                    App.render.renderMappingTable(mappings);
+                    
+                    // Reset search and sort when opening
+                    App.state.mappingsData = mappings;
+                    App.state.mappingSearchQuery = '';
+                    if (App.ui.mappingSearch) App.ui.mappingSearch.value = '';
+                    App.state.mappingSortConfig = { key: 'accountNo', direction: 'asc' };
+                    
+                    App.render.renderMappingTable();
                     App.render.openModal('mapping-modal');
                 } catch (error) {
                     App.render.showAlert('Load Failed', error.message, 'error');
@@ -1145,8 +1152,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!result.success) throw new Error(result.error || 'Failed to save.');
                     
                     App.render.closeModal('mapping-form-modal');
+                    
+                    // Refresh internal data state
                     const mappings = await App.api.getMappings();
-                    App.render.renderMappingTable(mappings);
+                    App.state.mappingsData = mappings;
+                    App.render.renderMappingTable();
+                    
                     App.render.showAlert('Success', 'Mapping saved successfully.', 'success');
 
                 } catch (error) {
@@ -1170,8 +1181,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             const result = await App.api.deleteMapping(mappingId);
                             if (!result.success) throw new Error(result.error);
                             
+                            // Refresh internal data state
                             const mappings = await App.api.getMappings();
-                            App.render.renderMappingTable(mappings);
+                            App.state.mappingsData = mappings;
+                            App.render.renderMappingTable();
+                            
                             App.render.showAlert('Success', 'Mapping deleted successfully.', 'success');
                         } catch (error) {
                             App.render.showAlert('Deletion Failed', error.message, 'error');
@@ -1204,7 +1218,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     App.ui.resultsContainer?.classList.add('hidden', 'opacity-0');
                     if (App.ui.downloadBtn) App.ui.downloadBtn.disabled = true;
                     if (App.ui.downloadExcelBtn) App.ui.downloadExcelBtn.disabled = true;
-                    if (App.ui.pushSapBtn) App.ui.pushSapBtn.disabled = true; // NEW: Disable SAP button
+                    if (App.ui.pushSapBtn) App.ui.pushSapBtn.disabled = true;
                 }
 
                 switch (newState) {
@@ -1223,7 +1237,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         setTimeout(() => App.ui.resultsContainer?.classList.remove('opacity-0'), 10);
                         if (App.ui.downloadBtn) App.ui.downloadBtn.disabled = false;
                         if (App.ui.downloadExcelBtn) App.ui.downloadExcelBtn.disabled = false;
-                        if (App.ui.pushSapBtn) App.ui.pushSapBtn.disabled = false; // NEW: Enable SAP button
+                        if (App.ui.pushSapBtn) App.ui.pushSapBtn.disabled = false;
                         break;
                 }
             },
@@ -1231,7 +1245,6 @@ document.addEventListener('DOMContentLoaded', () => {
             renderResults(data) {
                 const headers = data.headers;
 
-                // Render Header
                 if (App.ui.dataTableHead) {
                     if (headers && headers.length > 0) {
                         App.ui.dataTableHead.innerHTML = `
@@ -1246,11 +1259,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
                 
-                // Render Body
                 if (App.ui.dataTableBody) {
                     App.ui.dataTableBody.innerHTML = data.rows.map(row => {
                         const visibleCells = row.slice(0, headers.length);
-                        
                         return `
                             <tr class="hover:bg-gray-50">
                                 ${visibleCells.map(cell => 
@@ -1266,54 +1277,93 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             },
             
-            renderMappingTable(mappings) {
+            // NEW: Upgraded to support Search Filtering and Column Sorting
+            renderMappingTable() {
+                const mappings = App.state.mappingsData;
+                
                 if (!mappings || mappings.length === 0) {
                     if (App.ui.mappingTableContainer) {
-                        App.ui.mappingTableContainer.innerHTML = '<p class="text-center p-6 text-gray-500">No mappings defined.</p>';
+                        App.ui.mappingTableContainer.innerHTML = '<p class="text-center p-6 text-gray-500">No mappings defined in database.</p>';
                     }
                     return;
                 }
                 
-                const sortedMappings = [...mappings].sort((a, b) => {
-                    const accountA = String(a.accountNo || '').trim();
-                    const accountB = String(b.accountNo || '').trim();
-                    return accountA.localeCompare(accountB, undefined, { numeric: true });
+                // 1. Apply Search Filter
+                const query = App.state.mappingSearchQuery;
+                let filteredMappings = mappings;
+                
+                if (query) {
+                    filteredMappings = mappings.filter(row => {
+                        return Object.values(row).some(val => 
+                            String(val || '').toLowerCase().includes(query)
+                        );
+                    });
+                }
+                
+                // 2. Apply Sorting
+                const sortConfig = App.state.mappingSortConfig;
+                filteredMappings.sort((a, b) => {
+                    const valA = String(a[sortConfig.key] || '').trim().toLowerCase();
+                    const valB = String(b[sortConfig.key] || '').trim().toLowerCase();
+                    
+                    if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+                    if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+                    return 0;
                 });
                 
-                const headerClass = "px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider";
+                const headerClass = "px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider cursor-pointer hover:bg-gray-200 select-none transition-colors duration-150";
                 const cellClass = "px-6 py-4 whitespace-nowrap text-sm text-gray-800";
-                
                 const displayFields = App.state.displayFields;
 
-                const headersHtml = displayFields.map(f => `<th class="${headerClass}">${f.header}</th>`).join('');
-                const actionsHeader = App.state.isAdmin ? `<th class="${headerClass}">Actions</th>` : '';
+                // Build Table Headers with Sort Arrows
+                const headersHtml = displayFields.map(f => {
+                    if (f.key === 'id') {
+                        return `<th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">${f.header}</th>`;
+                    }
+                    
+                    let sortIcon = '<span class="text-gray-400 opacity-0 group-hover:opacity-50 ml-1"><i class="fas fa-sort"></i></span>';
+                    if (sortConfig.key === f.key) {
+                        sortIcon = sortConfig.direction === 'asc' 
+                            ? '<span class="text-green-600 ml-1"><i class="fas fa-sort-up"></i></span>' 
+                            : '<span class="text-green-600 ml-1"><i class="fas fa-sort-down"></i></span>';
+                    }
+                    
+                    return `<th class="${headerClass} group" onclick="document.dispatchEvent(new CustomEvent('sort-mapping', {detail: '${f.key}'}))">
+                                <div class="flex items-center">${f.header} ${sortIcon}</div>
+                            </th>`;
+                }).join('');
+                
+                const actionsHeader = App.state.isAdmin ? `<th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Actions</th>` : '';
                 
                 if (App.ui.mappingTableContainer) {
+                    if (filteredMappings.length === 0) {
+                        App.ui.mappingTableContainer.innerHTML = `<p class="text-center p-8 text-gray-500 font-medium">No records match your search.</p>`;
+                        return;
+                    }
+                
                     App.ui.mappingTableContainer.innerHTML = `
                         <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-100">
+                            <thead class="bg-gray-100 sticky top-0 z-10">
                                 <tr>
                                     ${headersHtml}
                                     ${actionsHeader}
                                 </tr>
                             </thead>
                             <tbody class="bg-white divide-y divide-gray-200">
-                            ${sortedMappings.map((row, index) => {
+                            ${filteredMappings.map((row, index) => {
                                 const cellsHtml = displayFields.map(f => {
                                     let value = row[f.key];
-                                    if (f.key === 'id') {
-                                        value = index + 1;
-                                    }
+                                    if (f.key === 'id') value = index + 1;
                                     return `<td class="${cellClass} ${f.key === 'id' || f.key === 'accountNo' ? 'font-medium' : ''}">${value || '-'}</td>`;
                                 }).join('');
 
                                 return `
-                                <tr class="hover:bg-gray-50">
+                                <tr class="hover:bg-blue-50 transition-colors">
                                     ${cellsHtml}
                                     ${App.state.isAdmin ? `
                                     <td class="${cellClass}">
-                                        <button class="edit-btn text-green-600 hover:text-green-800 mr-4" data-id="${row.id}">Edit</button>
-                                        <button class="delete-btn text-red-600 hover:text-red-800" data-id="${row.id}">Delete</button>
+                                        <button class="edit-btn text-blue-600 hover:text-blue-800 mr-4 font-medium" data-id="${row.id}"><i class="fas fa-edit mr-1"></i> Edit</button>
+                                        <button class="delete-btn text-red-600 hover:text-red-800 font-medium" data-id="${row.id}"><i class="fas fa-trash-alt mr-1"></i> Delete</button>
                                     </td>` : ''}
                                 </tr>`;
                             }).join('')}
