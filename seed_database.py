@@ -70,7 +70,7 @@ def seed_data():
                 return
 
             # Now, read the Excel file properly, using the correct header row
-            df = pd.read_excel(EXCEL_FILE_PATH, header=header_row, engine='openpyxl')
+            df = pd.read_excel(EXCEL_FILE_PATH, header=header_row, engine='openpyxl', dtype=str)
             df.fillna('', inplace=True)
             print(f"Found {len(df)} rows to import.")
 
@@ -140,7 +140,11 @@ def seed_data():
                 
                 houseBank=str(row.get('houseBank', '')).strip(),
                 bankGL=str(row.get('bankGL', '')).strip(),
-                bankName=str(row.get('bankName', '')).strip()
+                bankName=str(row.get('bankName', '')).strip(),
+                emailSender=str(row.get('emailSender')).strip() if row.get('emailSender') else None,
+                emailSubject=str(row.get('emailSubject')).strip() if row.get('emailSubject') else None,
+                # FIX: Safely grab the password, strip spaces, and chop off .0 if it exists
+                zipPassword=str(row.get('zipPassword')).strip().rstrip('.0') if row.get('zipPassword') else None
             )
             
             db.session.add(new_mapping)

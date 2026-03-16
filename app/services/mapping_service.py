@@ -56,7 +56,12 @@ def add_mapping(data):
         # Required fields:
         houseBank=data.get('houseBank', ''),
         bankGL=data.get('bankGL', ''),
-        bankName=data.get('bankName', '')
+        bankName=data.get('bankName', ''),
+        
+        # --- ADD THESE 3 NEW LINES ---
+        emailSender=data.get('emailSender'),
+        emailSubject=data.get('emailSubject'),
+        zipPassword=data.get('zipPassword')
     )
     db.session.add(new_mapping)
     db.session.commit()
@@ -88,6 +93,10 @@ def update_mapping(mapping_id, data):
     # Hidden fields must also be updated if they exist in the incoming data (which they will as hidden fields in the form)
     mapping_to_update.costCenter = data.get('costCenter', mapping_to_update.costCenter)
     mapping_to_update.email = data.get('email', mapping_to_update.email)
+
+    mapping_to_update.emailSender = data.get('emailSender', mapping_to_update.emailSender)
+    mapping_to_update.emailSubject = data.get('emailSubject', mapping_to_update.emailSubject)
+    mapping_to_update.zipPassword = data.get('zipPassword', mapping_to_update.zipPassword)
     
     db.session.commit()
 

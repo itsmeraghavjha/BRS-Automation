@@ -41,6 +41,11 @@ class Mapping(db.Model):
     bankName = db.Column(db.String(120))
     # ------------------
 
+    # --- NEW EMAIL AUTOMATION FIELDS ---
+    emailSender = db.Column(db.String(100), nullable=True) 
+    emailSubject = db.Column(db.String(200), nullable=True) 
+    zipPassword = db.Column(db.String(100), nullable=True)
+
     def to_dict(self):
         """A helper function to easily convert a mapping object to a dictionary, returning all fields."""
         # Returns ALL fields for use by the service layer and form population logic.
@@ -55,4 +60,7 @@ class Mapping(db.Model):
             'bankName': self.bankName,
             'costCenter': self.costCenter, # Hidden field for data persistence
             'email': self.email,           # Hidden field for data persistence
+            'emailSender': self.emailSender,
+            'emailSubject': self.emailSubject,
+            'zipPassword': self.zipPassword
         }
